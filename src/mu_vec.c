@@ -131,7 +131,7 @@ mu_vec_err_t mu_vec_ref(const mu_vec_t *v, size_t index, void *item_out) {
     return MU_STORE_ERR_NONE;
 }
 
-mu_vec_err_t mu_vec_replace(mu_vec_t *v, const void *item_in, size_t index) {
+mu_vec_err_t mu_vec_replace(mu_vec_t *v, size_t index, const void *item_in) {
     if (!v || !item_in) return MU_STORE_ERR_PARAM;
     if (index >= v->count) return MU_STORE_ERR_INDEX; // Check against current count
 
@@ -141,6 +141,22 @@ mu_vec_err_t mu_vec_replace(mu_vec_t *v, const void *item_in, size_t index) {
 
     memcpy(item_address, item_in, v->item_size);
 
+    return MU_STORE_ERR_NONE;
+}
+
+mu_vec_err_t mu_vec_swap(mu_vec_t *v, size_t index, void *item_io) {
+    // Validate parameters
+    if (v == NULL || item_io == NULL) {
+        return MU_STORE_ERR_PARAM;
+    }
+    if (v->count == 0) {
+        return MU_STORE_ERR_EMPTY;
+    }
+    if (index >= v->count) {
+        return MU_STORE_ERR_INDEX;
+    }
+    void *item_in_vec = (char *)v->items + index * v->item_size;
+    mu_store_swap_items(item_in_vec, item_io, v->item_size);
     return MU_STORE_ERR_NONE;
 }
 
@@ -175,7 +191,12 @@ mu_vec_err_t mu_vec_pop(mu_vec_t *v, void *item_out) {
     return MU_STORE_ERR_NONE;
 }
 
-mu_vec_err_t mu_vec_insert(mu_vec_t *v, const void *item_in, size_t index) {
+mu_vec_err_t mu_vec_peek(const mu_vec_t *v, void *item_out) {
+    size_t count = mu_vec_count(v);
+    return count > 0 ? mu_vec_ref(v, count-1, item_out) : MU_STORE_ERR_EMPTY;
+}
+
+mu_vec_err_t mu_vec_insert(mu_vec_t *v, size_t index, const void *item_in) {
     if (!v || !item_in) return MU_STORE_ERR_PARAM;
     if (mu_vec_is_full(v)) return MU_STORE_ERR_FULL;
     // Index can be from 0 to count (inserting at count is like push)
@@ -204,7 +225,7 @@ mu_vec_err_t mu_vec_insert(mu_vec_t *v, const void *item_in, size_t index) {
     return MU_STORE_ERR_NONE;
 }
 
-mu_vec_err_t mu_vec_delete(mu_vec_t *v, void *item_out, size_t index) {
+mu_vec_err_t mu_vec_delete(mu_vec_t *v, size_t index, void *item_out) {
     if (!v) return MU_STORE_ERR_PARAM;
     if (mu_vec_is_empty(v)) return MU_STORE_ERR_EMPTY;
     // Index must be from 0 to count - 1
@@ -339,7 +360,7 @@ mu_vec_err_t mu_vec_sorted_insert(
              // Index is already the correct insertion point (lower_bound) from mu_store_sort_find
              // Perform insertion (involves memmove and memcpy based on item_size)
              // In mu_pvec, this would involve memmove on void** and assigning the new pointer
-            return mu_vec_insert(v, item_in, index); // mu_vec_insert handles shifting and copying
+            return mu_vec_insert(v, index, item_in); // mu_vec_insert handles shifting and copying
 
         case MU_VEC_INSERT_LAST: { // Insert at upper bound
             if (mu_vec_is_full(v)) return MU_STORE_ERR_FULL;
@@ -362,7 +383,7 @@ mu_vec_err_t mu_vec_sorted_insert(
             // If not found, insert_idx is the lower bound, which is the correct position.
              // Perform insertion (involves memmove and memcpy based on item_size)
              // In mu_pvec, this would involve memmove on void** and assigning the new pointer
-            return mu_vec_insert(v, item_in, insert_idx); // mu_vec_insert handles shifting and copying
+            return mu_vec_insert(v, insert_idx, item_in); // mu_vec_insert handles shifting and copying
         }
 
 
@@ -371,7 +392,7 @@ mu_vec_err_t mu_vec_sorted_insert(
             // index from mu_store_sort_find is the first matching item (lower bound)
              // Perform replacement (involves memcpy based on item_size)
              // In mu_pvec, this would involve replacing a void* pointer: v->item_store[index] = item_in;
-            return mu_vec_replace(v, item_in, index); // mu_vec_replace handles copying
+            return mu_vec_replace(v, index, item_in); // mu_vec_replace handles copying
 
         case MU_VEC_UPDATE_LAST: { // Update last match if found
             if (!found) return MU_STORE_ERR_NOTFOUND;
@@ -389,7 +410,7 @@ mu_vec_err_t mu_vec_sorted_insert(
              size_t last_match_index = current_idx - 1;
              // Perform replacement (involves memcpy based on item_size)
              // In mu_pvec, this would involve replacing a void* pointer: v->item_store[last_match_index] = item_in;
-            return mu_vec_replace(v, item_in, last_match_index); // mu_vec_replace handles copying
+            return mu_vec_replace(v, last_match_index, item_in); // mu_vec_replace handles copying
         }
 
 
@@ -417,12 +438,12 @@ mu_vec_err_t mu_vec_sorted_insert(
             if (found) {
                 // index from mu_store_sort_find is the first matching item (lower bound)
                 // Perform replacement (memcpy based on item_size)
-                return mu_vec_replace(v, item_in, index);
+                return mu_vec_replace(v, index, item_in);
             } else {
                 // Not found, insert at the calculated index (lower bound)
                 if (mu_vec_is_full(v)) return MU_STORE_ERR_FULL;
                  // index is the correct insertion point (lower_bound)
-                return mu_vec_insert(v, item_in, index); // mu_vec_insert handles shifting and copying
+                return mu_vec_insert(v, index, item_in); // mu_vec_insert handles shifting and copying
             }
 
         case MU_VEC_UPSERT_LAST: { // Update last match if found, else insert at lower bound
@@ -438,13 +459,13 @@ mu_vec_err_t mu_vec_sorted_insert(
                  }
                  size_t last_match_index = current_idx - 1;
                  // Perform replacement (memcpy based on item_size)
-                return mu_vec_replace(v, item_in, last_match_index);
+                return mu_vec_replace(v, last_match_index, item_in);
             } else {
                 // Not found, insert at the calculated index (lower bound).
                 // This is the correct insertion point to maintain sort order.
                 if (mu_vec_is_full(v)) return MU_STORE_ERR_FULL;
                 // index is the correct insertion point (lower_bound)
-                return mu_vec_insert(v, item_in, index); // mu_vec_insert handles shifting and copying
+                return mu_vec_insert(v, index, item_in); // mu_vec_insert handles shifting and copying
             }
         }
 
@@ -453,14 +474,14 @@ mu_vec_err_t mu_vec_sorted_insert(
             if (mu_vec_is_full(v)) return MU_STORE_ERR_FULL;
             // Not found, insert at the calculated index (lower bound)
              // index is the correct insertion point (lower_bound)
-            return mu_vec_insert(v, item_in, index); // mu_vec_insert handles shifting and copying
+            return mu_vec_insert(v, index, item_in); // mu_vec_insert handles shifting and copying
 
         case MU_VEC_INSERT_DUPLICATE: // Insert only if found
              if (!found) return MU_STORE_ERR_NOTFOUND; // Fail if no item with same value exists
              if (mu_vec_is_full(v)) return MU_STORE_ERR_FULL;
              // Found, insert at the calculated index (lower bound).
              // This places the new duplicate before the existing duplicates.
-            return mu_vec_insert(v, item_in, index); // mu_vec_insert handles shifting and copying
+            return mu_vec_insert(v, index, item_in); // mu_vec_insert handles shifting and copying
 
 
         default:

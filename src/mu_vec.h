@@ -184,12 +184,31 @@ mu_vec_err_t mu_vec_ref(const mu_vec_t *v, size_t index, void *item_out);
  * @brief Replaces the item at a specific index with a new item.
  *
  * @param v Pointer to the vector structure.
- * @param item_in Pointer to the item data to insert. Must be non-NULL.
  * @param index The index of the item to replace.
+ * @param item_in Pointer to the item data to insert. Must be non-NULL.
  * @return MU_STORE_ERR_NONE on success, MU_STORE_ERR_PARAM if v is NULL or item_in is NULL,
  * MU_STORE_ERR_INDEX if index is out of bounds.
  */
-mu_vec_err_t mu_vec_replace(mu_vec_t *v, const void *item_in, size_t index);
+mu_vec_err_t mu_vec_replace(mu_vec_t *v, size_t index, const void *item_in);
+
+/**
+ * @brief Swaps the item at a specific index with the provided item.
+ *
+ * The item at `index` in the vector is copied into the memory pointed to by
+ * `item_io`, and the item pointed to by `item_io` is copied into the vector
+ * at `index`.
+ *
+ * @param v Pointer to the vector structure. Must not be NULL.
+ * @param index The index of the item to swap. Must be within [0, count - 1].
+ * @param[in,out] item_io Pointer to the item data to swap with. On success,
+ * this buffer will contain the item that was originally at the specified index.
+ * Must be non-NULL and large enough to hold an item (at least v->item_size bytes).
+ * @return MU_STORE_ERR_NONE on success,
+ * MU_STORE_ERR_PARAM if v is NULL or item_io is NULL,
+ * MU_STORE_ERR_EMPTY if the vector is empty,
+ * MU_STORE_ERR_INDEX if index is out of bounds.
+ */
+mu_vec_err_t mu_vec_swap(mu_vec_t *v, size_t index, void *item_io);
 
 /**
  * @brief Adds an item to the end of the vector.
@@ -214,18 +233,30 @@ mu_vec_err_t mu_vec_push(mu_vec_t *v, const void *item_in);
 mu_vec_err_t mu_vec_pop(mu_vec_t *v, void *item_out);
 
 /**
+ * @brief Copies the last item from the vector without removing it.
+ *
+ * @param v Pointer to the vector structure. Must not be NULL.
+ * @param[out] item_out Pointer to a buffer where the last item data will be copied.
+ * Must be non-NULL and large enough to hold an item (at least v->item_size bytes).
+ * @return MU_STORE_ERR_NONE on success,
+ * MU_STORE_ERR_PARAM if v is NULL or item_out is NULL,
+ * MU_STORE_ERR_EMPTY if the vector is empty.
+ */
+mu_vec_err_t mu_vec_peek(const mu_vec_t *v, void *item_out);
+
+/**
  * @brief Inserts an item at a specific index.
  *
  * Shifts existing elements to the right to make space.
  *
  * @param v Pointer to the vector structure.
- * @param item_in Pointer to the item data to insert. Must be non-NULL.
  * @param index The index where the item should be inserted. Must be between 0 and count (inclusive).
+ * @param item_in Pointer to the item data to insert. Must be non-NULL.
  * @return MU_STORE_ERR_NONE on success, MU_STORE_ERR_PARAM if v is NULL or item_in is NULL,
  * MU_STORE_ERR_FULL if the vector is already at capacity,
  * MU_STORE_ERR_INDEX if index is greater than count.
  */
-mu_vec_err_t mu_vec_insert(mu_vec_t *v, const void *item_in, size_t index);
+mu_vec_err_t mu_vec_insert(mu_vec_t *v, size_t index, const void *item_in);
 
 /**
  * @brief Deletes the item at a specific index.
@@ -233,15 +264,15 @@ mu_vec_err_t mu_vec_insert(mu_vec_t *v, const void *item_in, size_t index);
  * Shifts subsequent elements to the left.
  *
  * @param v Pointer to the vector structure.
+ * @param index The index of the item to delete. Must be between 0 and count - 1.
  * @param[out] item_out Pointer to a buffer where the deleted item data will be copied.
  * Must be large enough to hold an item (at least v->item_size bytes).
  * Can be NULL if the caller doesn't need the item data.
- * @param index The index of the item to delete. Must be between 0 and count - 1.
  * @return MU_STORE_ERR_NONE on success, MU_STORE_ERR_PARAM if v is NULL,
  * MU_STORE_ERR_EMPTY if the vector is empty,
  * MU_STORE_ERR_INDEX if index is out of bounds.
  */
-mu_vec_err_t mu_vec_delete(mu_vec_t *v, void *item_out, size_t index);
+mu_vec_err_t mu_vec_delete(mu_vec_t *v, size_t index, void *item_out);
 
 /**
  * @brief Finds the first item in the vector that matches the criteria defined by find_fn.

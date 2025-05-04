@@ -157,7 +157,7 @@ mu_pvec_err_t mu_pvec_ref(mu_pvec_t *v, size_t index, void **item) {
     return MU_STORE_ERR_NONE;
 }
 
-mu_pvec_err_t mu_pvec_insert(mu_pvec_t *v, const void *item, size_t index) {
+mu_pvec_err_t mu_pvec_insert(mu_pvec_t *v, size_t index, const void *item) {
     if (!v) return MU_STORE_ERR_PARAM;
     // Cannot insert if full
     if (v->count >= v->capacity) return MU_STORE_ERR_FULL;
@@ -180,7 +180,7 @@ mu_pvec_err_t mu_pvec_insert(mu_pvec_t *v, const void *item, size_t index) {
     return MU_STORE_ERR_NONE;
 }
 
-mu_pvec_err_t mu_pvec_delete(mu_pvec_t *v, void **item, size_t index) {
+mu_pvec_err_t mu_pvec_delete(mu_pvec_t *v, size_t index, void **item) {
     if (!v) return MU_STORE_ERR_PARAM;
     if (v->count == 0) return MU_STORE_ERR_EMPTY; // Or INDEX if preferred
     if (index >= v->count) return MU_STORE_ERR_INDEX;
@@ -200,7 +200,7 @@ mu_pvec_err_t mu_pvec_delete(mu_pvec_t *v, void **item, size_t index) {
     return MU_STORE_ERR_NONE;
 }
 
-mu_pvec_err_t mu_pvec_replace(mu_pvec_t *v, const void *item, size_t index) {
+mu_pvec_err_t mu_pvec_replace(mu_pvec_t *v, size_t index, const void *item) {
     if (!v) return MU_STORE_ERR_PARAM;
     if (index >= v->count) return MU_STORE_ERR_INDEX;
 
@@ -208,6 +208,24 @@ mu_pvec_err_t mu_pvec_replace(mu_pvec_t *v, const void *item, size_t index) {
     v->item_store[index] = (void*)item;
     return MU_STORE_ERR_NONE;
 }
+
+mu_pvec_err_t mu_pvec_swap(mu_pvec_t *v, size_t index, void **item_io) {
+    // Validate parameters
+    if (v == NULL || item_io == NULL) {
+        return MU_STORE_ERR_PARAM;
+    }
+    if (v->count == 0) {
+        return MU_STORE_ERR_EMPTY;
+    }
+    if (index >= v->count) {
+        return MU_STORE_ERR_INDEX;
+    }
+
+    mu_store_swap_pointers(&v->item_store[index], item_io);
+
+    return MU_STORE_ERR_NONE;
+}
+
 
 mu_pvec_err_t mu_pvec_push(mu_pvec_t *v, const void *item) {
     if (!v) return MU_STORE_ERR_PARAM;
@@ -225,6 +243,11 @@ mu_pvec_err_t mu_pvec_pop(mu_pvec_t *v, void **item) {
     *item = v->item_store[--v->count];
     // v->item_store[v->count] = NULL; // Optional: Null out the popped slot
     return MU_STORE_ERR_NONE;
+}
+
+mu_pvec_err_t mu_pvec_peek(const mu_pvec_t *v, void **item_out) {
+    size_t count = mu_pvec_count(v);
+    return count > 0 ? mu_pvec_ref((mu_pvec_t *)v, count-1, item_out) : MU_STORE_ERR_EMPTY;
 }
 
 mu_pvec_err_t mu_pvec_find(

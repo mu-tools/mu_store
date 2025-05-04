@@ -336,11 +336,11 @@ void test_mu_vec_ref_invalid(void) {
 void test_mu_vec_replace_valid(void) {
     populate_vector_with_items(&test_vector, (const test_item_t[]){item1, item2}, 2); // [item1, item2]
 
-    mu_vec_err_t err = mu_vec_replace(&test_vector, &item3, 0); // [item3, item2]
+    mu_vec_err_t err = mu_vec_replace(&test_vector, 0, &item3); // [item3, item2]
     TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
     TEST_ASSERT_EQUAL_MEMORY(&item3, (uint8_t*)test_vector.items + 0 * test_vector.item_size, sizeof(test_item_t));
 
-    err = mu_vec_replace(&test_vector, &item4, 1); // [item3, item4]
+    err = mu_vec_replace(&test_vector, 1, &item4); // [item3, item4]
     TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
     TEST_ASSERT_EQUAL_MEMORY(&item4, (uint8_t*)test_vector.items + 1 * test_vector.item_size, sizeof(test_item_t));
     TEST_ASSERT_EQUAL(2, mu_vec_count(&test_vector)); // Count should not change
@@ -353,19 +353,120 @@ void test_mu_vec_replace_invalid(void) {
     populate_vector_with_items(&test_vector, (const test_item_t[]){item1}, 1); // count is 1
 
     // Index >= count
-    mu_vec_err_t err = mu_vec_replace(&test_vector, &item2, 1);
+    mu_vec_err_t err = mu_vec_replace(&test_vector, 1, &item2);
     TEST_ASSERT_EQUAL(MU_STORE_ERR_INDEX, err);
 
-    err = mu_vec_replace(&test_vector, &item2, 10); // Index far out of bounds
+    err = mu_vec_replace(&test_vector, 10, &item2); // Index far out of bounds
     TEST_ASSERT_EQUAL(MU_STORE_ERR_INDEX, err);
 
     // NULL vector pointer
-    err = mu_vec_replace(NULL, &item1, 0);
+    err = mu_vec_replace(NULL, 0, &item1);
     TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, err);
 
     // NULL item_in pointer
-     err = mu_vec_replace(&test_vector, NULL, 0);
+     err = mu_vec_replace(&test_vector, 0, NULL);
     TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, err);
+}
+
+void test_mu_vec_swap(void) {
+    // Setup: Initialize vector with some items
+    test_item_t storage[5];
+    mu_vec_t v;
+    mu_vec_init(&v, storage, 5, sizeof(test_item_t));
+
+    test_item_t item;
+    test_item_t item1 = {1, 'A'};
+    test_item_t item2 = {2, 'B'};
+    test_item_t item3 = {3, 'C'};
+
+    mu_vec_push(&v, &item1); // v: [ {1, 'A'} ]
+    mu_vec_push(&v, &item2); // v: [ {1, 'A'}, {2, 'B'} ]
+    mu_vec_push(&v, &item3); // v: [ {1, 'A'}, {2, 'B'}, {3, 'C'} ]
+
+    TEST_ASSERT_EQUAL_size_t(3, mu_vec_count(&v));
+
+    test_item_t item_to_swap = {99, 'Z'};
+    mu_vec_err_t err;
+
+    // Test 1: Swap with a valid index (index 1)
+    // v: [ {1, 'A'}, {2, 'B'}, {3, 'C'} ]
+    // swap item_to_swap ({99, 'Z'}) with item at index 1 ({2, 'B'})
+    err = mu_vec_swap(&v, 1, &item_to_swap);
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
+
+    // After swap:
+    // v should be: v: [ {1, 'A'}, {99, 'Z'}, {3, 'C'} ]
+    // item_to_swap should now be the original item at index 1: {2, 'B'}
+    TEST_ASSERT_EQUAL_size_t(3, mu_vec_count(&v)); // Count should be unchanged
+
+    mu_vec_ref(&v, 0, &item); // Should be {1, 'A'}
+    TEST_ASSERT_EQUAL(1, item.value);
+    TEST_ASSERT_EQUAL('A', item.id);
+
+    mu_vec_ref(&v, 1, &item); // Should be {99, 'Z'}
+    TEST_ASSERT_EQUAL(99, item.value);
+    TEST_ASSERT_EQUAL('Z', item.id);
+
+    mu_vec_ref(&v, 2, &item); // Should be {3, 'C'}
+    TEST_ASSERT_EQUAL(3, item.value);
+    TEST_ASSERT_EQUAL('C', item.id);
+
+    // Should be {2, 'B'}
+    TEST_ASSERT_EQUAL(2, item_to_swap.value);
+    TEST_ASSERT_EQUAL('B', item_to_swap.id);
+
+    // Test 2: Swap with index 0
+    test_item_t item_to_swap_2 = {100, 'Y'};
+    err = mu_vec_swap(&v, 0, &item_to_swap_2);
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
+    // v should be: [ {100, 'Y'}, {99, 'Z'}, {3, 'C'} ]
+
+    // item_to_swap_2 should now be the original item at index 0: {1, 'A'}
+    mu_vec_ref(&v, 0, &item);
+    TEST_ASSERT_EQUAL(100, item.value);
+    TEST_ASSERT_EQUAL('Y', item.id);
+
+    TEST_ASSERT_EQUAL(1, item_to_swap_2.value);
+    TEST_ASSERT_EQUAL('A', item_to_swap_2.id);
+
+    // Test 3: Swap with last index (index 2)
+    test_item_t item_to_swap_3 = {200, 'X'};
+    err = mu_vec_swap(&v, 2, &item_to_swap_3);
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
+    // v should be: [ {100, 'Y'}, {99, 'Z'}, {200, 'X'} ]
+    mu_vec_ref(&v, 2, &item);
+    TEST_ASSERT_EQUAL(200, item.value);
+    TEST_ASSERT_EQUAL('X', item.id);
+    // item_to_swap_3 should now be the original item at index 2: {3, 'C'}
+    TEST_ASSERT_EQUAL(3, item_to_swap_3.value);
+    TEST_ASSERT_EQUAL('C', item_to_swap_3.id);
+
+
+    // Test 4: Swap when v is NULL
+    err = mu_vec_swap(NULL, 0, &item_to_swap);
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, err);
+
+    // Test 5: Swap when item_io is NULL
+    err = mu_vec_swap(&v, 0, NULL);
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, err);
+
+    // Test 6: Swap with index out of bounds (index == count)
+    err = mu_vec_swap(&v, mu_vec_count(&v), &item_to_swap);
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_INDEX, err);
+
+    // Test 7: Swap with index out of bounds (index > count)
+    err = mu_vec_swap(&v, mu_vec_count(&v) + 1, &item_to_swap);
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_INDEX, err);
+
+    // Test 8: Swap when vector is empty
+    mu_vec_clear(&v);
+    TEST_ASSERT_EQUAL_size_t(0, mu_vec_count(&v));
+    err = mu_vec_swap(&v, 0, &item_to_swap);
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_EMPTY, err); // Or INDEX, but EMPTY is more specific
+
+    // Test 9: Swap when vector is empty with index > 0
+    err = mu_vec_swap(&v, 5, &item_to_swap);
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_EMPTY, err); // Or INDEX
 }
 
 /**
@@ -467,6 +568,64 @@ void test_mu_vec_pop_invalid_param(void) {
     // Note: NULL item_out is allowed for pop, so no invalid param test needed for item_out = NULL
 }
 
+void test_mu_vec_peek(void) {
+    // Setup: Initialize vector with some items
+    test_item_t storage[5];
+    mu_vec_t v;
+    mu_vec_init(&v, storage, 5, sizeof(test_item_t));
+
+    test_item_t item1 = {1, 'A'};
+    test_item_t item2 = {2, 'B'};
+    test_item_t item3 = {3, 'C'};
+
+    mu_vec_push(&v, &item1); // v: [ {1, 'A'} ]
+    mu_vec_push(&v, &item2); // v: [ {1, 'A'}, {2, 'B'} ]
+    mu_vec_push(&v, &item3); // v: [ {1, 'A'}, {2, 'B'}, {3, 'C'} ]
+
+    TEST_ASSERT_EQUAL_size_t(3, mu_vec_count(&v));
+
+    test_item_t peeked_item;
+    mu_vec_err_t err;
+    size_t count_before_peek;
+
+    // Test 1: Peek when vector is not empty
+    // Last item is {3, 'C'} at index 2
+    count_before_peek = mu_vec_count(&v);
+    err = mu_vec_peek(&v, &peeked_item);
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
+
+    // Check the peeked item's content
+    TEST_ASSERT_EQUAL(3, peeked_item.value);
+    TEST_ASSERT_EQUAL('C', peeked_item.id);
+
+    // Check that the vector count has not changed
+    TEST_ASSERT_EQUAL_size_t(count_before_peek, mu_vec_count(&v));
+
+    // Test 2: Peek when v is NULL
+    err = mu_vec_peek(NULL, &peeked_item);
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_EMPTY, err);
+
+    // Test 3: Peek when item_out is NULL
+    err = mu_vec_peek(&v, NULL);
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, err);
+
+    // Test 4: Peek when vector is empty
+    mu_vec_clear(&v);
+    TEST_ASSERT_EQUAL_size_t(0, mu_vec_count(&v));
+    err = mu_vec_peek(&v, &peeked_item);
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_EMPTY, err);
+
+     // Test 5: Peek with only one item in vector
+     mu_vec_push(&v, &item1); // v: [ {1, 'A'} ]
+     TEST_ASSERT_EQUAL_size_t(1, mu_vec_count(&v));
+     count_before_peek = mu_vec_count(&v);
+     err = mu_vec_peek(&v, &peeked_item);
+     TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
+     TEST_ASSERT_EQUAL(1, peeked_item.value);
+     TEST_ASSERT_EQUAL('A', peeked_item.id);
+     TEST_ASSERT_EQUAL_size_t(count_before_peek, mu_vec_count(&v));
+}
+
 /**
  * @brief Test insert function at various positions.
  */
@@ -475,7 +634,7 @@ void test_mu_vec_insert_success(void) {
     TEST_ASSERT_EQUAL(2, mu_vec_count(&test_vector));
 
     // Insert at the beginning (index 0)
-    mu_vec_err_t err = mu_vec_insert(&test_vector, &item4, 0); // [item4, item1, item3]
+    mu_vec_err_t err = mu_vec_insert(&test_vector, 0, &item4); // [item4, item1, item3]
     TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
     TEST_ASSERT_EQUAL(3, mu_vec_count(&test_vector));
     TEST_ASSERT_EQUAL_MEMORY(&item4, (uint8_t*)test_vector.items + 0 * test_vector.item_size, sizeof(test_item_t));
@@ -483,7 +642,7 @@ void test_mu_vec_insert_success(void) {
     TEST_ASSERT_EQUAL_MEMORY(&item3, (uint8_t*)test_vector.items + 2 * test_vector.item_size, sizeof(test_item_t));
 
     // Insert in the middle (index 2)
-    mu_vec_err_t err2 = mu_vec_insert(&test_vector, &item2, 2); // [item4, item1, item2, item3]
+    mu_vec_err_t err2 = mu_vec_insert(&test_vector, 2, &item2); // [item4, item1, item2, item3]
     TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err2);
     TEST_ASSERT_EQUAL(4, mu_vec_count(&test_vector));
     TEST_ASSERT_EQUAL_MEMORY(&item4, (uint8_t*)test_vector.items + 0 * test_vector.item_size, sizeof(test_item_t));
@@ -492,7 +651,7 @@ void test_mu_vec_insert_success(void) {
     TEST_ASSERT_EQUAL_MEMORY(&item3, (uint8_t*)test_vector.items + 3 * test_vector.item_size, sizeof(test_item_t));
 
     // Insert at the end (index == count)
-    mu_vec_err_t err3 = mu_vec_insert(&test_vector, &item5, mu_vec_count(&test_vector)); // [item4, item1, item2, item3, item5]
+    mu_vec_err_t err3 = mu_vec_insert(&test_vector, mu_vec_count(&test_vector), &item5); // [item4, item1, item2, item3, item5]
     TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err3);
     TEST_ASSERT_EQUAL(5, mu_vec_count(&test_vector));
     TEST_ASSERT_EQUAL_MEMORY(&item5, (uint8_t*)test_vector.items + 4 * test_vector.item_size, sizeof(test_item_t));
@@ -508,7 +667,7 @@ void test_mu_vec_insert_full(void) {
     TEST_ASSERT_TRUE(mu_vec_is_full(&test_vector));
 
     // Attempt to insert one more element
-    mu_vec_err_t err = mu_vec_insert(&test_vector, &item2, 0);
+    mu_vec_err_t err = mu_vec_insert(&test_vector, 0, &item2);
     TEST_ASSERT_EQUAL(MU_STORE_ERR_FULL, err);
     TEST_ASSERT_EQUAL(TEST_VEC_CAPACITY, mu_vec_count(&test_vector)); // Count should not change
 }
@@ -520,20 +679,20 @@ void test_mu_vec_insert_invalid_params_or_index(void) {
     populate_vector_with_items(&test_vector, (const test_item_t[]){item1}, 1); // count is 1
 
     // Test NULL vector
-    mu_vec_err_t err = mu_vec_insert(NULL, &item2, 0);
+    mu_vec_err_t err = mu_vec_insert(NULL, 0, &item2);
     TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, err);
 
     // Test NULL item_in
-    err = mu_vec_insert(&test_vector, NULL, 0);
+    err = mu_vec_insert(&test_vector, 0, NULL);
     TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, err);
 
     // Test index > count (when not full)
-    err = mu_vec_insert(&test_vector, &item2, mu_vec_count(&test_vector) + 1);
+    err = mu_vec_insert(&test_vector, mu_vec_count(&test_vector) + 1, &item2);
     TEST_ASSERT_EQUAL(MU_STORE_ERR_INDEX, err);
     TEST_ASSERT_EQUAL(1, mu_vec_count(&test_vector)); // Count should not change
 
     // Test index far out of bounds
-    err = mu_vec_insert(&test_vector, &item2, TEST_VEC_CAPACITY + 5);
+    err = mu_vec_insert(&test_vector, TEST_VEC_CAPACITY + 5, &item2);
      TEST_ASSERT_EQUAL(MU_STORE_ERR_INDEX, err); // Should be INDEX error as per header
     TEST_ASSERT_EQUAL(1, mu_vec_count(&test_vector)); // Count should not change
 }
@@ -547,7 +706,7 @@ void test_mu_vec_delete_success(void) {
     TEST_ASSERT_EQUAL(4, mu_vec_count(&test_vector));
 
     test_item_t deleted_item; // Buffer for output
-    mu_vec_err_t err = mu_vec_delete(&test_vector, &deleted_item, 1); // Delete item2 at index 1: [item1, item3, item4]
+    mu_vec_err_t err = mu_vec_delete(&test_vector, 1, &deleted_item); // Delete item2 at index 1: [item1, item3, item4]
     TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
     TEST_ASSERT_EQUAL_MEMORY(&item2, &deleted_item, sizeof(test_item_t));
     TEST_ASSERT_EQUAL(3, mu_vec_count(&test_vector));
@@ -556,7 +715,7 @@ void test_mu_vec_delete_success(void) {
     TEST_ASSERT_EQUAL_MEMORY(&item4, (uint8_t*)test_vector.items + 2 * test_vector.item_size, sizeof(test_item_t));
 
     memset(&deleted_item, 0, sizeof(test_item_t)); // Clear buffer
-    err = mu_vec_delete(&test_vector, &deleted_item, 0); // Delete item1 at index 0: [item3, item4]
+    err = mu_vec_delete(&test_vector, 0, &deleted_item); // Delete item1 at index 0: [item3, item4]
     TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
     TEST_ASSERT_EQUAL_MEMORY(&item1, &deleted_item, sizeof(test_item_t));
     TEST_ASSERT_EQUAL(2, mu_vec_count(&test_vector));
@@ -564,13 +723,13 @@ void test_mu_vec_delete_success(void) {
     TEST_ASSERT_EQUAL_MEMORY(&item4, (uint8_t*)test_vector.items + 1 * test_vector.item_size, sizeof(test_item_t));
 
     // Test deleting with NULL item_out
-    err = mu_vec_delete(&test_vector, NULL, 1); // Delete item4 at index 1 (last): [item3]
+    err = mu_vec_delete(&test_vector, 1, NULL); // Delete item4 at index 1 (last): [item3]
     TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
     TEST_ASSERT_EQUAL(1, mu_vec_count(&test_vector));
     TEST_ASSERT_EQUAL_MEMORY(&item3, (uint8_t*)test_vector.items + 0 * test_vector.item_size, sizeof(test_item_t));
 
     memset(&deleted_item, 0, sizeof(test_item_t)); // Clear buffer
-    err = mu_vec_delete(&test_vector, &deleted_item, 0); // Delete item3 at index 0 (last): []
+    err = mu_vec_delete(&test_vector, 0, &deleted_item); // Delete item3 at index 0 (last): []
     TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
     TEST_ASSERT_EQUAL_MEMORY(&item3, &deleted_item, sizeof(test_item_t));
     TEST_ASSERT_EQUAL(0, mu_vec_count(&test_vector));
@@ -586,7 +745,7 @@ void test_mu_vec_delete_invalid(void) {
     memset(&deleted_item, 0, sizeof(test_item_t)); // Clear buffer
 
     // Test delete from empty vector
-    mu_vec_err_t err = mu_vec_delete(&test_vector, &deleted_item, 0);
+    mu_vec_err_t err = mu_vec_delete(&test_vector, 0, &deleted_item);
     TEST_ASSERT_EQUAL(MU_STORE_ERR_EMPTY, err);
     // Output parameter should not be written
     memset(&deleted_item, 0, sizeof(test_item_t));
@@ -595,20 +754,20 @@ void test_mu_vec_delete_invalid(void) {
     populate_vector_with_items(&test_vector, (const test_item_t[]){item1}, 1); // count is 1
 
     // Test index >= count
-    err = mu_vec_delete(&test_vector, &deleted_item, 1);
+    err = mu_vec_delete(&test_vector, 1, &deleted_item);
     TEST_ASSERT_EQUAL(MU_STORE_ERR_INDEX, err);
     // Output parameter should not be written
     memset(&deleted_item, 0, sizeof(test_item_t));
     TEST_ASSERT_EQUAL(1, mu_vec_count(&test_vector));
 
-    err = mu_vec_delete(&test_vector, &deleted_item, 10); // Index far out of bounds
+    err = mu_vec_delete(&test_vector, 10, &deleted_item); // Index far out of bounds
     TEST_ASSERT_EQUAL(MU_STORE_ERR_INDEX, err);
     // Output parameter should not be written
     memset(&deleted_item, 0, sizeof(test_item_t));
     TEST_ASSERT_EQUAL(1, mu_vec_count(&test_vector));
 
     // Test NULL vector
-    err = mu_vec_delete(NULL, &deleted_item, 0);
+    err = mu_vec_delete(NULL, 0, &deleted_item);
     TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, err);
     // Output parameter should not be written
     memset(&deleted_item, 0, sizeof(test_item_t));
@@ -1366,7 +1525,7 @@ void test_mu_vec_variable_item_size_insert_delete(void) {
     mu_vec_push(&double_vec, &d_item3); // [1.1, 3.3]
 
     // Insert in the middle
-    mu_vec_err_t err = mu_vec_insert(&double_vec, &d_item2, 1); // [1.1, 2.2, 3.3]
+    mu_vec_err_t err = mu_vec_insert(&double_vec, 1, &d_item2); // [1.1, 2.2, 3.3]
     TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
     TEST_ASSERT_EQUAL(3, mu_vec_count(&double_vec));
     TEST_ASSERT_EQUAL_MEMORY(&d_item1, (uint8_t*)double_vec.items + 0 * double_vec.item_size, double_vec.item_size);
@@ -1375,7 +1534,7 @@ void test_mu_vec_variable_item_size_insert_delete(void) {
 
     // Delete from the middle
     double_item_t deleted_double;
-    err = mu_vec_delete(&double_vec, &deleted_double, 1); // Delete 2.2 at index 1: [1.1, 3.3]
+    err = mu_vec_delete(&double_vec, 1, &deleted_double); // Delete 2.2 at index 1: [1.1, 3.3]
     TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
     TEST_ASSERT_EQUAL(2, mu_vec_count(&double_vec));
     TEST_ASSERT_EQUAL_MEMORY(&d_item2, &deleted_double, double_vec.item_size);
@@ -1404,6 +1563,7 @@ int main(void) {
     RUN_TEST(test_mu_vec_ref_invalid);
     RUN_TEST(test_mu_vec_replace_valid);
     RUN_TEST(test_mu_vec_replace_invalid);
+    RUN_TEST(test_mu_vec_swap);
 
     // Stack operations
     RUN_TEST(test_mu_vec_push_success);
@@ -1412,6 +1572,8 @@ int main(void) {
     RUN_TEST(test_mu_vec_pop_success);
     RUN_TEST(test_mu_vec_pop_empty);
     RUN_TEST(test_mu_vec_pop_invalid_param); // Corrected name from test_mu_pvec
+    RUN_TEST(test_mu_vec_peek);
+
 
     // Insertion/deletion by index
     RUN_TEST(test_mu_vec_insert_success);

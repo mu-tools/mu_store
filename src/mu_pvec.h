@@ -158,13 +158,13 @@ mu_pvec_err_t mu_pvec_ref(mu_pvec_t *v, size_t index, void **item);
  * is equivalent to `mu_pvec_push`. Requires capacity.
  *
  * @param v Pointer to the mu_pvec. Must not be NULL.
- * @param item The item (a `void*` pointer) to insert.
  * @param index The index at which to insert the element.
+ * @param item The item (a `void*` pointer) to insert.
  * @return MU_STORE_ERR_NONE on success, MU_STORE_ERR_PARAM if v is NULL,
  * MU_STORE_ERR_FULL if the mu_pvec is at maximum capacity,
  * MU_STORE_ERR_INDEX if the index is out of bounds (> count).
  */
-mu_pvec_err_t mu_pvec_insert(mu_pvec_t *v, const void *item, size_t index);
+mu_pvec_err_t mu_pvec_insert(mu_pvec_t *v, size_t index, const void *item);
 
 /**
  * @brief Deletes the item (pointer) at the specified index.
@@ -173,13 +173,13 @@ mu_pvec_err_t mu_pvec_insert(mu_pvec_t *v, const void *item, size_t index);
  * up to fill the gap. Decreases the mu_pvec's count.
  *
  * @param v Pointer to the mu_pvec. Must not be NULL.
- * @param item Optional output parameter to store the deleted item (pointer). May be NULL.
  * @param index The index of the element to delete.
+ * @param item Optional output parameter to store the deleted item (pointer). May be NULL.
  * @return MU_STORE_ERR_NONE on success, MU_STORE_ERR_PARAM if v is NULL,
  * MU_STORE_ERR_EMPTY if the mu_pvec is empty,
  * MU_STORE_ERR_INDEX if the index is out of bounds ([0, count - 1]).
  */
-mu_pvec_err_t mu_pvec_delete(mu_pvec_t *v, void **item, size_t index);
+mu_pvec_err_t mu_pvec_delete(mu_pvec_t *v, size_t index, void **item);
 
 /**
  * @brief Replaces the item (pointer) at the specified index with a new item (pointer).
@@ -189,12 +189,31 @@ mu_pvec_err_t mu_pvec_delete(mu_pvec_t *v, void **item, size_t index);
  * [0, count - 1].
  *
  * @param v Pointer to the mu_pvec. Must not be NULL.
- * @param item The new `void*` pointer to store.
  * @param index The index of the element to replace.
+ * @param item The new `void*` pointer to store.
  * @return MU_STORE_ERR_NONE on success, MU_STORE_ERR_PARAM if v is NULL,
  * MU_STORE_ERR_INDEX if the index is out of bounds.
  */
-mu_pvec_err_t mu_pvec_replace(mu_pvec_t *v, const void *item, size_t index);
+mu_pvec_err_t mu_pvec_replace(mu_pvec_t *v, size_t index, const void *item);
+
+/**
+ * @brief Swaps the item (pointer) at a specific index with the provided item (pointer).
+ *
+ * The item (pointer) at `index` in the pvector is copied into the location
+ * pointed to by `item_io`, and the item (pointer) pointed to by `item_io`
+ * is copied into the pvector at `index`.
+ *
+ * @param v Pointer to the mu_pvec. Must not be NULL.
+ * @param index The index of the item (pointer) to swap. Must be within [0, count - 1].
+ * @param[in,out] item_io Pointer to a `void*` location holding the pointer to swap
+ * with. On success, this location will contain the pointer that was originally
+ * at the specified index. Must be non-NULL.
+ * @return MU_STORE_ERR_NONE on success,
+ * MU_STORE_ERR_PARAM if v is NULL or item_io is NULL,
+ * MU_STORE_ERR_EMPTY if the pvector is empty,
+ * MU_STORE_ERR_INDEX if index is out of bounds.
+ */
+mu_pvec_err_t mu_pvec_swap(mu_pvec_t *v, size_t index, void **item_io);
 
 /**
  * @brief Pushes an item (pointer) onto the end of the mu_pvec (stack behavior).
@@ -221,6 +240,19 @@ mu_pvec_err_t mu_pvec_push(mu_pvec_t *v, const void *item);
  * MU_STORE_ERR_EMPTY if the mu_pvec is empty.
  */
 mu_pvec_err_t mu_pvec_pop(mu_pvec_t *v, void **item);
+
+/**
+ * @brief Copies the last item (pointer) from the mu_pvec without removing it.
+ *
+ * Copies the `void*` pointer from the end of the mu_pvec's backing store
+ * into the location pointed to by `item_out`.
+ *
+ * @param v Pointer to the mu_pvec. Must not be NULL.
+ * @param item_out Output parameter to store the peeked item (pointer). Must not be NULL.
+ * @return MU_STORE_ERR_NONE on success, MU_STORE_ERR_PARAM if v or item_out is NULL,
+ * MU_STORE_ERR_EMPTY if the mu_pvec is empty.
+ */
+mu_pvec_err_t mu_pvec_peek(const mu_pvec_t *v, void **item_out);
 
 /**
  * @brief Finds the index of the first item (pointer) matching a condition.
