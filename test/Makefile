@@ -1,5 +1,6 @@
 # Directories for source, test, and object files
 SRC_DIR := ../src
+INC_DIR := ../inc
 TEST_DIR := ../test
 TEST_SUPPORT_DIR := ../../test_support
 OBJ_DIR := $(TEST_DIR)/obj
@@ -85,17 +86,17 @@ clean:
 # Compile source files to object files
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c
 	mkdir -p $(@D)
-	$(CC) $(CFLAGS) -I$(SRC_DIR) $(DEPFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) -I$(INC_DIR) $(DEPFLAGS) -c $< -o $@
 
 # Compile test files to object files
 $(OBJ_DIR)/%.o: $(TEST_DIR)/%.c
 	mkdir -p $(@D)
-	$(CC) $(CFLAGS) -I$(SRC_DIR) -I$(TEST_SUPPORT_DIR) $(DEPFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) -I$(INC_DIR) -I$(TEST_SUPPORT_DIR) $(DEPFLAGS) -c $< -o $@
 
 # Compile test support files to object files
 $(OBJ_DIR)/%.o: $(TEST_SUPPORT_DIR)/%.c
 	mkdir -p $(@D)
-	$(CC) $(CFLAGS) -I$(SRC_DIR) $(DEPFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) -I$(INC_DIR) $(DEPFLAGS) -c $< -o $@
 
 # Link object files to create test executables
 $(BIN_DIR)/%: $(OBJ_DIR)/%.o $(SRC_OBJS) $(TEST_SUPPORT_OBJS)
