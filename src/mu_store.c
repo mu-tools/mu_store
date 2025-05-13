@@ -32,8 +32,8 @@
 // Includes
 
 #include "mu_store.h"
-#include <string.h> // For memcpy
 #include <stdint.h> // For uint8_t
+#include <string.h> // For memcpy
 
 // *****************************************************************************
 // Private types and definitions
@@ -98,12 +98,8 @@ static inline void swap_pointers(void **a, void **b) {
  * @param item_size The size of each item in bytes.
  * @param compare The comparison function. Must not be NULL.
  */
-static void heapify_items(
-    void *base, 
-    size_t n, 
-    size_t i, 
-    size_t item_size, 
-    mu_store_compare_fn compare);
+static void heapify_items(void *base, size_t n, size_t i, size_t item_size,
+                          mu_store_compare_fn compare);
 
 /**
  * @brief Maintains the max heap property for a subtree rooted at index i (for
@@ -117,33 +113,66 @@ static void heapify_items(
  * @param i The index of the root of the subtree to heapify.
  * @param compare The comparison function. Must not be NULL.
  */
-static void heapify_pointers(
-    void **arr, 
-    size_t n, 
-    size_t i, 
-    mu_store_compare_fn compare);
+static void heapify_pointers(void **arr, size_t n, size_t i,
+                             mu_store_compare_fn compare);
 
 // *****************************************************************************
 // Public function definitions
 
 void mu_store_swap_items(void *a, void *b, size_t item_size) {
-    if (!a || !b) return;
+    if (!a || !b)
+        return;
     swap_items(a, b, item_size);
 }
 
 void mu_store_swap_pointers(void **a, void **b) {
-    if (!a || !b) return;
+    if (!a || !b)
+        return;
     swap_pointers(a, b);
 }
 
-mu_store_err_t mu_store_sort(
-    void *base,
-    size_t item_count,
-    size_t item_size,
-    mu_store_compare_fn compare_fn)
-{
-    if (!base || !compare_fn || item_size == 0) return MU_STORE_ERR_PARAM;
-    if (item_count <= 1) return MU_STORE_ERR_NONE; // Nothing to sort
+size_t mu_store_search(const void *base, size_t item_count, size_t item_size,
+                       mu_store_compare_fn compare_fn, const void *item) {
+    const char *arr = (const char *)base;
+    size_t lo = 0, hi = item_count;
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        const void *mid_ptr = arr + mid * item_size;
+        int c = compare_fn(item, mid_ptr);
+        if (c > 0) {
+            // new item > existing → must go after mid
+            lo = mid + 1;
+        } else {
+            // new item <= existing → candidate insertion point
+            hi = mid;
+        }
+    }
+    return lo;
+}
+
+size_t mu_store_psearch(const void *const *base, size_t item_count,
+                        mu_store_compare_fn compare_fn, const void *item) {
+    size_t lo = 0, hi = item_count;
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        int c = compare_fn(item, base[mid]);
+        if (c > 0) {
+            // new item is greater → must insert after mid
+            lo = mid + 1;
+        } else {
+            // new item is <= arr[mid] → candidate insertion point
+            hi = mid;
+        }
+    }
+    return lo;
+}
+
+mu_store_err_t mu_store_sort(void *base, size_t item_count, size_t item_size,
+                             mu_store_compare_fn compare_fn) {
+    if (!base || !compare_fn || item_size == 0)
+        return MU_STORE_ERR_PARAM;
+    if (item_count <= 1)
+        return MU_STORE_ERR_NONE; // Nothing to sort
 
     // Build max heap
     // Start from the last non-leaf node and heapify down to the root
@@ -163,20 +192,20 @@ mu_store_err_t mu_store_sort(
         // array
         swap_items(root_addr, current_last_addr, item_size);
 
-        // call max heapify on the reduced heap (size i) starting at the root (index 0)
-        // The recursive call within heapify_items already has the correct argument order.
+        // call max heapify on the reduced heap (size i) starting at the root
+        // (index 0) The recursive call within heapify_items already has the
+        // correct argument order.
         heapify_items(base, i, 0, item_size, compare_fn);
     }
 
     return MU_STORE_ERR_NONE;
 }
-mu_store_err_t mu_store_psort(
-    void **base, 
-    size_t item_count,
-    mu_store_compare_fn compare_fn) 
-{
-    if (!base || !compare_fn) return MU_STORE_ERR_PARAM;
-    if (item_count <= 1) return MU_STORE_ERR_NONE; // Nothing to sort
+mu_store_err_t mu_store_psort(void **base, size_t item_count,
+                              mu_store_compare_fn compare_fn) {
+    if (!base || !compare_fn)
+        return MU_STORE_ERR_PARAM;
+    if (item_count <= 1)
+        return MU_STORE_ERR_NONE; // Nothing to sort
 
     // Build max heap
     // Start from the last non-leaf node and heapify down to the root
@@ -192,7 +221,8 @@ mu_store_err_t mu_store_psort(
         // Swap pointer at index 0 with pointer at index i
         swap_pointers(&base[0], &base[i]);
 
-        // call max heapify on the reduced heap (size i) starting at the root (index 0)
+        // call max heapify on the reduced heap (size i) starting at the root
+        // (index 0)
         heapify_pointers(base, i, 0, compare_fn);
     }
 
@@ -202,13 +232,8 @@ mu_store_err_t mu_store_psort(
 // *****************************************************************************
 // Private (static) function definitions
 
-static void heapify_items(
-    void *base, 
-    size_t n, 
-    size_t i, 
-    size_t item_size, 
-    mu_store_compare_fn compare)
-{
+static void heapify_items(void *base, size_t n, size_t i, size_t item_size,
+                          mu_store_compare_fn compare) {
     size_t largest = i;       // Initialize largest as root
     size_t left = 2 * i + 1;  // left child index
     size_t right = 2 * i + 2; // right child index
@@ -217,45 +242,48 @@ static void heapify_items(
     uint8_t *byte_base = (uint8_t *)base;
 
     // If left child is larger than root
-    // compare receives pointers to the items: (byte_base + left * item_size) and (byte_base + largest * item_size)
-    if (left < n && compare(byte_base + left * item_size, byte_base + largest * item_size) > 0) {
+    // compare receives pointers to the items: (byte_base + left * item_size)
+    // and (byte_base + largest * item_size)
+    if (left < n && compare(byte_base + left * item_size,
+                            byte_base + largest * item_size) > 0) {
         largest = left;
     }
 
     // If right child is larger than largest so far
-    // compare receives pointers to the items: (byte_base + right * item_size) and (byte_base + largest * item_size)
-    if (right < n && compare(byte_base + right * item_size, byte_base + largest * item_size) > 0) {
+    // compare receives pointers to the items: (byte_base + right * item_size)
+    // and (byte_base + largest * item_size)
+    if (right < n && compare(byte_base + right * item_size,
+                             byte_base + largest * item_size) > 0) {
         largest = right;
     }
 
     // If largest is not root
     if (largest != i) {
         // Swap the item at i and the item at largest
-        swap_items(byte_base + i * item_size, byte_base + largest * item_size, item_size);
+        swap_items(byte_base + i * item_size, byte_base + largest * item_size,
+                   item_size);
 
         // Recursively heapify the affected sub-tree
         heapify_items(base, n, largest, item_size, compare);
     }
 }
 
-static void heapify_pointers(
-    void **arr, 
-    size_t n, 
-    size_t i, 
-    mu_store_compare_fn compare)
-{
+static void heapify_pointers(void **arr, size_t n, size_t i,
+                             mu_store_compare_fn compare) {
     size_t largest = i;       // Initialize largest as root
     size_t left = 2 * i + 1;  // left child index
     size_t right = 2 * i + 2; // right child index
 
     // If left child is larger than root
-    // compare receives pointers to the void* pointers: &arr[left] and &arr[largest]
+    // compare receives pointers to the void* pointers: &arr[left] and
+    // &arr[largest]
     if (left < n && compare(&arr[left], &arr[largest]) > 0) {
         largest = left;
     }
 
     // If right child is larger than largest so far
-    // compare receives pointers to the void* pointers: &arr[right] and &arr[largest]
+    // compare receives pointers to the void* pointers: &arr[right] and
+    // &arr[largest]
     if (right < n && compare(&arr[right], &arr[largest]) > 0) {
         largest = right;
     }

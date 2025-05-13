@@ -24,7 +24,8 @@
 
 /**
  * @file mu_spsc.h
- * @brief Implementation of a lock-free Single Producer / Single Consumer (SPSC) queue.
+ * @brief Implementation of a lock-free Single Producer / Single Consumer (SPSC)
+ * queue.
  *
  * The SPSC queue stores pointer-sized objects in a circular buffer.
  * It enables safe communication between an interrupt and foreground levels,
@@ -38,17 +39,17 @@
 #define _MU_SPSC_H_
 
 // *****************************************************************************
+// Includes
+
+#include <stdbool.h>
+#include <stdint.h>
+
+// *****************************************************************************
 // C++ Compatibility
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-// *****************************************************************************
-// Includes
-
-#include <stdbool.h>
-#include <stdint.h>
 
 // *****************************************************************************
 // Public types and definitions
@@ -57,10 +58,10 @@ extern "C" {
  * @brief Error codes for SPSC operations.
  */
 typedef enum {
-    MU_SPSC_ERR_NONE,   /**< No error */
-    MU_SPSC_ERR_EMPTY,  /**< Attempted to read from an empty queue */
-    MU_SPSC_ERR_FULL,   /**< Attempted to write to a full queue */
-    MU_SPSC_ERR_SIZE    /**< Queue size is invalid (must be a power of two) */
+    MU_SPSC_ERR_NONE,  /**< No error */
+    MU_SPSC_ERR_EMPTY, /**< Attempted to read from an empty queue */
+    MU_SPSC_ERR_FULL,  /**< Attempted to write to a full queue */
+    MU_SPSC_ERR_SIZE   /**< Queue size is invalid (must be a power of two) */
 } mu_spsc_err_t;
 
 /**
@@ -77,9 +78,9 @@ typedef void *mu_spsc_item_t;
  * `head` is updated by the consumer, while `tail` is updated by the producer.
  */
 typedef struct {
-    uint16_t mask;                 /**< Mask for computing wrap-around indices */
-    volatile uint16_t head;        /**< Read index (updated by consumer) */
-    volatile uint16_t tail;        /**< Write index (updated by producer) */
+    uint16_t mask;          /**< Mask for computing wrap-around indices */
+    volatile uint16_t head; /**< Read index (updated by consumer) */
+    volatile uint16_t tail; /**< Write index (updated by producer) */
     volatile mu_spsc_item_t *store; /**< Pointer to queue backing store */
 } mu_spsc_t;
 
@@ -90,9 +91,12 @@ typedef struct {
  * @brief Initialize an SPSC queue with a given backing store.
  *
  * @param q Pointer to the queue structure.
- * @param store Pointer to the allocated store buffer (must be a power of two in size).
- * @param store_size Size of the store buffer (must be at least 2 and a power of two).
- * @return MU_SPSC_ERR_NONE if successful, MU_SPSC_ERR_SIZE if store_size is invalid.
+ * @param store Pointer to the allocated store buffer (must be a power of two in
+ * size).
+ * @param store_size Size of the store buffer (must be at least 2 and a power of
+ * two).
+ * @return MU_SPSC_ERR_NONE if successful, MU_SPSC_ERR_SIZE if store_size is
+ * invalid.
  */
 mu_spsc_err_t mu_spsc_init(mu_spsc_t *q, volatile mu_spsc_item_t *store,
                            uint16_t store_size);
@@ -111,7 +115,8 @@ mu_spsc_err_t mu_spsc_reset(mu_spsc_t *q);
 /**
  * @brief Get the maximum number of items that can be stored in the queue.
  *
- * Capacity is one less than `store_size` to differentiate between empty and full states.
+ * Capacity is one less than `store_size` to differentiate between empty and
+ * full states.
  *
  * @param q Pointer to the queue structure.
  * @return Maximum number of usable slots in the queue.
@@ -121,8 +126,8 @@ uint16_t mu_spsc_capacity(mu_spsc_t *q);
 /**
  * @brief Insert an item into the queue.
  *
- * May only be called by the **producer** (typically an interrupt or background thread).
- * This operation is **non-blocking** and returns immediately.
+ * May only be called by the **producer** (typically an interrupt or background
+ * thread). This operation is **non-blocking** and returns immediately.
  *
  * @param q Pointer to the queue structure.
  * @param item Item to store in the queue.

@@ -32,17 +32,17 @@
 #define _MU_STORE_H_
 
 // *****************************************************************************
+// Includes
+
+#include <stdbool.h>
+#include <stddef.h>
+
+// *****************************************************************************
 // C++ Compatibility
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-// *****************************************************************************
-// Includes
-
-#include <stdbool.h>
-#include <stddef.h>
 
 // *****************************************************************************
 // Public types and definitions
@@ -124,16 +124,66 @@ void mu_store_swap_items(void *a, void *b, size_t item_size);
 void mu_store_swap_pointers(void **a, void **b);
 
 /**
+ * @brief Find the insertion index for an item in a sorted array.
+ *
+ * Uses binary search on an array of `item_count` elements of size `item_size`
+ * (pointed to by `base`) to locate the smallest index `i` in [0..item_count]
+ * such that `compare_fn(item, &base[i]) <= 0`.  Useful for finding where to
+ * insert `item` to keep the array sorted.
+ *
+ * @param base        Pointer to the first element of the array.
+ * @param item_count  Number of elements currently in the array.
+ * @param item_size   Size in bytes of each element.
+ * @param compare_fn  Comparison function: returns <0 if a<b, 0 if a==b, >0 if a>b.
+ *                    Called as `compare_fn(item, &base[i])`.
+ * @param item        Pointer to the value to search for.
+ * @return Index in [0..item_count] where `item` should be inserted.
+ */
+size_t mu_store_search(const void *base, size_t item_count, size_t item_size,
+                       mu_store_compare_fn compare_fn, const void *item);
+/**
+ * @brief  Locate the insertion index for a new pointer in a sorted array.
+ *
+ * Performs a binary search (“lower bound”) on a sorted array of pointers,
+ * returning the smallest index at which the new item could be inserted
+ * without violating ascending order according to the provided comparison
+ * function.
+ *
+ * @param base         Pointer to the first element of a sorted array of
+ *                     pointers (`const void * const *`). Must not be NULL
+ *                     unless `item_count == 0`.
+ * @param item_count   Number of elements currently in the array.
+ * @param compare_fn   Function to compare the new item (`item`) against an
+ *                     existing element. It is called as
+ *                     `compare_fn(item, base[i])` and should return:
+ *                     - negative if `item < base[i]`
+ *                     - zero     if `item == base[i]`
+ *                     - positive if `item > base[i]`
+ * @param item         Pointer to the new element to insert. Must not be NULL
+ *                     if `compare_fn` expects a valid pointer.
+ *
+ * @return The index in the range [0..item_count] at which `item` should be
+ *         inserted to maintain the array’s sorted ascending order.  If all
+ *         existing elements compare less than `item`, returns `item_count`.
+ */
+size_t mu_store_psearch(const void *const *base, size_t item_count,
+                        mu_store_compare_fn compare_fn, const void *item);
+
+/**
  * @brief in-place sort of an array of equally sized items using Heapsort.
  *
  * Sorts an array of items of a fixed size (`item_size`) in ascending order
  * based on the provided comparison function. Uses the Heapsort algorithm.
  *
- * @param base Pointer to the beginning of the array of items to sort. Must not be NULL.
+ * @param base Pointer to the beginning of the array of items to sort. Must not
+ * be NULL.
  * @param item_count The number of items in the array.
  * @param item_size The size of each item in bytes. Must be greater than 0.
- * @param compare_fn The comparison function used to determine the order of elements. Must not be NULL. The comparison function receives pointers to the items being compared.
- * @return MU_STORE_ERR_NONE on success, MU_STORE_ERR_PARAM if base, compare_fn is NULL, or item_size is 0.
+ * @param compare_fn The comparison function used to determine the order of
+ * elements. Must not be NULL. The comparison function receives pointers to the
+ * items being compared.
+ * @return MU_STORE_ERR_NONE on success, MU_STORE_ERR_PARAM if base, compare_fn
+ * is NULL, or item_size is 0.
  */
 mu_store_err_t mu_store_sort(void *base, size_t item_count, size_t item_size,
                              mu_store_compare_fn compare_fn);

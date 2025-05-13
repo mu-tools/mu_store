@@ -10,6 +10,7 @@ COVERAGE_DIR := $(TEST_DIR)/coverage
 # Source files (application code)
 SRC_FILES := \
 	$(SRC_DIR)/mu_pool.c \
+	$(SRC_DIR)/mu_pqueue.c \
 	$(SRC_DIR)/mu_pvec.c \
 	$(SRC_DIR)/mu_queue.c \
 	$(SRC_DIR)/mu_spsc.c \
@@ -19,6 +20,7 @@ SRC_FILES := \
 # Test files (unit tests)
 TEST_FILES := \
 	$(TEST_DIR)/test_mu_pool.c \
+	$(TEST_DIR)/test_mu_pqueue.c \
 	$(TEST_DIR)/test_mu_pvec.c \
 	$(TEST_DIR)/test_mu_queue.c \
 	$(TEST_DIR)/test_mu_spsc.c \

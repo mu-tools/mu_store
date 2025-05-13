@@ -30,1490 +30,878 @@
 // *****************************************************************************
 // Includes
 
+#include "mu_pvec.h"
+#include "mu_store.h"
 #include "unity.h"
-#include "mu_pvec.h" // Includes necessary headers like <stddef.h> and mu_store.h
-#include <string.h> // For memcpy, memcmp
-#include <stdbool.h> // For bool
+#include <stdbool.h>
+#include <stddef.h>
 
-// *****************************************************************************
-// Define fakes for external dependencies
-// (None needed for testing mu_pvec functions directly with real dependencies)
+#define CAP 10
 
-// *****************************************************************************
-// Private types and definitions
-
-// Define the data type to be stored as pointers in the vector
+/** User data type for testing sorted insert & update policies */
 typedef struct {
-    int value;
-    char id;
-} test_item_t;
+    int value; /**< Sort key */
+    int id;    /**< Distinct tag for update verification */
+} item_t;
 
-// Sample test items (these are the actual items the vector will store pointers to)
-static test_item_t item1 = {.value = 10, .id = 'A'};
-static test_item_t item2 = {.value = 20, .id = 'B'};
-static test_item_t item3 = {.value = 30, .id = 'C'};
-static test_item_t item4 = {.value = 5,  .id = 'D'};
-static test_item_t item5 = {.value = 20, .id = 'E'}; // Duplicate value
-
-static void test_fn(void) {
-    return;
+/** Compare two item_t pointers by their `value` field */
+static int cmp_item(const void *a, const void *b) {
+    /* `a` and `b` are pointers to the elements stored in the pvec,
+       which themselves are `item_t*` */
+    const item_t *ia = *(const item_t *const *)a;
+    const item_t *ib = *(const item_t *const *)b;
+    return ia->value - ib->value;
 }
 
-// Test data (pointers to various things) - Example
-static int obj1 = 1;
-static float obj2 = 2.0f;
-static const char* obj3 = "three";
-static void* func_ptr = (void*) test_fn; // Example function pointer
-
-// Static storage for the vector's pointers (this is the 'item_store')
-#define TEST_PVEC_CAPACITY 10
-static void *pvec_storage[TEST_PVEC_CAPACITY];
-static mu_pvec_t test_vector;
-
-// *****************************************************************************
-// Private static inline function and function declarations
-
-// Comparison function for pointers to test_item_t (for mu_pvec_sort and sorted_insert helpers)
-// This function receives addresses of the void* elements in the pvec's item_store
-static int compare_pointers_by_value(const void *a, const void *b) {
-    // a and b are const void**, pointing to void* within pvec_storage
-    const test_item_t *item_a = *(const test_item_t * const *)a; // Dereference void** to get test_item_t*
-    const test_item_t *item_b = *(const test_item_t * const *)b; // Dereference void** to get test_item_t*
-    if (item_a->value < item_b->value) return -1;
-    if (item_a->value > item_b->value) return 1;
-    return 0;
+/* Helpers for sorting and finding */
+static int cmp_ints(const void *a, const void *b) {
+    /* a and b are pointers to void* elements in the pvec */
+    const int *ia = *(const int *const *)a;
+    const int *ib = *(const int *const *)b;
+    return (*ia) - (*ib);
 }
 
-// Comparison function for pointers to test_item_t (for mu_pvec_sort) - compare by id
-// static int compare_pointers_by_id(const void *a, const void *b) {
-//     const test_item_t *item_a = *(const test_item_t * const *)a;
-//     const test_item_t *item_b = *(const test_item_t * const *)b;
-//     if (item_a->id < item_b->id) return -1;
-//     if (item_a->id > item_b->id) return 1;
-//     return 0;
-// }
-
-
-// Find function for mu_pvec_find/rfind (find by value)
-// This function receives the stored pointer (void*) and the arg
-static bool find_test_item_by_value_fn(const void *element_ptr, const void *arg) {
-    // element_ptr is the void* stored in the vector, which we know points to a test_item_t
-    const test_item_t *item = (const test_item_t *)element_ptr;
-    // arg is the optional argument passed to mu_pvec_find, which we expect to be a pointer to an int
-    const int *target_value = (const int *)arg;
-    return (item->value == *target_value);
+static bool find_eq(const void *item, const void *arg) {
+    /* item is the stored void*; arg is the target void* */
+    return item == arg;
 }
 
-// Find function for mu_pvec_find/rfind (find by id)
-static bool find_test_item_by_id_fn(const void *element_ptr, const void *arg) {
-    const test_item_t *item = (const test_item_t *)element_ptr;
-    // arg is expected to be a pointer to a char
-    const char *target_id = (const char *)arg;
-    return (item->id == *target_id);
-}
+void setUp(void) {}
+void tearDown(void) {}
 
-// Helper to check if an array of test_item_t pointers is sorted using a compare function
-// This helper is specific to the test structure, comparing the values the pointers point to.
-static bool is_pointers_sorted_by_value(void *const *arr, size_t count) {
-    if (count == 0) {
-        return true; // an empty array is always sorted!
-    }
-    for (size_t i = 0; i < count - 1; ++i) {
-        // Compare the values pointed to by the pointers arr[i] and arr[i+1]
-        const test_item_t *item_a = (const test_item_t *)arr[i];
-        const test_item_t *item_b = (const test_item_t *)arr[i + 1];
-        if (item_a->value > item_b->value) { // Check for ascending value
-            return false;                    // Not in ascending order
-        }
-    }
-    return true; // Is sorted
-}
-
-// static bool is_pointers_sorted_by_id(void *const *arr, size_t count) {
-//     if (count == 0) {
-//         return true; // an empty array is always sorted!
-//     }
-//     for (size_t i = 0; i < count - 1; ++i) {
-//         const test_item_t *item_a = (const test_item_t *)arr[i];
-//         const test_item_t *item_b = (const test_item_t *)arr[i + 1];
-//         if (item_a->id > item_b->id) { // Check for ascending id
-//             return false;              // Not in ascending order
-//         }
-//     }
-//     return true; // Is sorted
-// }
-
-// *****************************************************************************
-// Unity Test Setup and Teardown
-
-void setUp(void) {
-    // Removed FFF_RESET_HISTORY();
-
-    // Initialize the vector before each test
-    // The storage is static, but init resets count and assigns the store pointer
-    mu_pvec_init(&test_vector, pvec_storage, TEST_PVEC_CAPACITY);
-    // Clear the storage pointers to NULL for clean state, though not strictly necessary for correctness
-    memset(pvec_storage, 0, sizeof(pvec_storage));
-}
-
-void tearDown(void) {
-    // Clean up vector (optional, as init resets count)
-    mu_pvec_clear(&test_vector);
-}
-
-// Helper function to populate vector with specific item pointers
-static void populate_vector_with_pointers(mu_pvec_t *v, void *items[], size_t count) {
-    mu_pvec_clear(v);
-    for (size_t i = 0; i < count; ++i) {
-        mu_pvec_push(v, items[i]);
-    }
-}
-
-
-// *****************************************************************************
-// Test Cases
-
-/**
- * @brief Test initialization with valid parameters.
- */
-void test_mu_pvec_init_success(void) {
-    mu_pvec_t vec;
-    void *store[5];
-    mu_pvec_t *result = mu_pvec_init(&vec, store, 5);
-
-    TEST_ASSERT_NOT_NULL(result);
-    TEST_ASSERT_EQUAL_PTR(&vec, result); // init returns the initialized struct pointer
-    TEST_ASSERT_EQUAL_PTR(store, vec.item_store);
-    TEST_ASSERT_EQUAL(5, vec.capacity);
-    TEST_ASSERT_EQUAL(0, vec.count);
-}
-
-/**
- * @brief Test initialization with invalid parameters.
- */
-void test_mu_pvec_init_invalid_params(void) {
-    mu_pvec_t vec;
-    void *store[5];
-
-    TEST_ASSERT_NULL(mu_pvec_init(NULL, store, 5)); // NULL vector pointer
-    TEST_ASSERT_NULL(mu_pvec_init(&vec, NULL, 5)); // NULL item_store pointer
-    TEST_ASSERT_NULL(mu_pvec_init(&vec, store, 0)); // Zero capacity
-    TEST_ASSERT_NULL(mu_pvec_init(NULL, NULL, 0)); // Multiple NULLs
-}
-
-/**
- * @brief Test capacity function.
- */
-void test_mu_pvec_capacity(void) {
-    TEST_ASSERT_EQUAL(TEST_PVEC_CAPACITY, mu_pvec_capacity(&test_vector));
-    TEST_ASSERT_EQUAL(0, mu_pvec_capacity(NULL)); // Test with NULL
-}
-
-/**
- * @brief Test count function.
- */
-void test_mu_pvec_count(void) {
-    TEST_ASSERT_EQUAL(0, mu_pvec_count(&test_vector));
-
-    mu_pvec_push(&test_vector, &item1);
-    TEST_ASSERT_EQUAL(1, mu_pvec_count(&test_vector));
-
-    mu_pvec_push(&test_vector, &item2);
-    TEST_ASSERT_EQUAL(2, mu_pvec_count(&test_vector));
-
-    void *popped_item = NULL;
-    mu_pvec_pop(&test_vector, &popped_item); // Dummy pop
-    TEST_ASSERT_EQUAL(1, mu_pvec_count(&test_vector));
-
-    mu_pvec_clear(&test_vector);
-    TEST_ASSERT_EQUAL(0, mu_pvec_count(&test_vector));
-
-    TEST_ASSERT_EQUAL(0, mu_pvec_count(NULL)); // Test with NULL
-}
-
-/**
- * @brief Test is_empty function.
- */
-void test_mu_pvec_is_empty(void) {
-    TEST_ASSERT_TRUE(mu_pvec_is_empty(&test_vector));
-
-    mu_pvec_push(&test_vector, &item1);
-    TEST_ASSERT_FALSE(mu_pvec_is_empty(&test_vector));
-
-    mu_pvec_clear(&test_vector);
-    TEST_ASSERT_TRUE(mu_pvec_is_empty(&test_vector));
-
-    TEST_ASSERT_TRUE(mu_pvec_is_empty(NULL)); // Test with NULL
-}
-
-/**
- * @brief Test is_full function.
- */
-void test_mu_pvec_is_full(void) {
-    TEST_ASSERT_FALSE(mu_pvec_is_full(&test_vector));
-
-    // Fill the vector
-    for (size_t i = 0; i < TEST_PVEC_CAPACITY; ++i) {
-         mu_pvec_push(&test_vector, &item1); // Push dummy item
-    }
-    TEST_ASSERT_EQUAL(TEST_PVEC_CAPACITY, mu_pvec_count(&test_vector));
-    TEST_ASSERT_TRUE(mu_pvec_is_full(&test_vector));
-
-    void *popped_item = NULL;
-    mu_pvec_pop(&test_vector, &popped_item); // Dummy pop
-    TEST_ASSERT_FALSE(mu_pvec_is_full(&test_vector));
-
-    TEST_ASSERT_FALSE(mu_pvec_is_full(NULL)); // Test with NULL
-}
-
-
-/**
- * @brief Test clear function.
- */
-void test_mu_pvec_clear(void) {
-    mu_pvec_push(&test_vector, &item1);
-    mu_pvec_push(&test_vector, &item2);
-    TEST_ASSERT_EQUAL(2, mu_pvec_count(&test_vector));
-
-    mu_pvec_err_t err = mu_pvec_clear(&test_vector);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_EQUAL(0, mu_pvec_count(&test_vector));
-
-    // Verify clearing an already empty vector is fine
-    err = mu_pvec_clear(&test_vector);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_EQUAL(0, mu_pvec_count(&test_vector));
-
-    // Test with NULL vector
-    err = mu_pvec_clear(NULL);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, err);
-}
-
-/**
- * @brief Test ref function for valid indices (using the new signature).
- */
-void test_mu_pvec_ref_valid(void) {
-    mu_pvec_push(&test_vector, &item1); // Index 0
-    mu_pvec_push(&test_vector, &item2); // Index 1
-
-    void *retrieved_item = NULL;
-    mu_pvec_err_t err = mu_pvec_ref(&test_vector, 0, &retrieved_item);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_EQUAL_PTR(&item1, retrieved_item);
-
-    retrieved_item = NULL;
-    err = mu_pvec_ref(&test_vector, 1, &retrieved_item);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_EQUAL_PTR(&item2, retrieved_item);
-}
-
-/**
- * @brief Test ref function for invalid indices and NULL vector/item (using the new signature).
- */
-void test_mu_pvec_ref_invalid(void) {
-    mu_pvec_push(&test_vector, &item1); // count is 1
-
-    void *retrieved_item = NULL;
-    mu_pvec_err_t err = mu_pvec_ref(&test_vector, 1, &retrieved_item); // Index > count - 1
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_INDEX, err);
-    TEST_ASSERT_NULL(retrieved_item); // Output parameter should not be written
-
-    err = mu_pvec_ref(&test_vector, 0, NULL); // Valid index, NULL item pointer
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, err);
-
-    retrieved_item = NULL;
-    err = mu_pvec_ref(NULL, 0, &retrieved_item); // NULL vector pointer
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, err);
-    TEST_ASSERT_NULL(retrieved_item); // Output parameter should not be written
-
-    err = mu_pvec_ref(NULL, 0, NULL); // NULL vector and NULL item pointer
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, err);
-}
-
-/**
- * @brief Test replace function for valid indices.
- */
-void test_mu_pvec_replace_valid(void) {
-    mu_pvec_push(&test_vector, &item1); // [item1]
-    mu_pvec_push(&test_vector, &item2); // [item1, item2]
-
-    mu_pvec_err_t err = mu_pvec_replace(&test_vector, 0, &item3); // [item3, item2]
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_EQUAL_PTR(&item3, test_vector.item_store[0]);
-
-    err = mu_pvec_replace(&test_vector, 1, &item4); // [item3, item4]
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_EQUAL_PTR(&item4, test_vector.item_store[1]);
-    TEST_ASSERT_EQUAL(2, mu_pvec_count(&test_vector)); // Count should not change
-}
-
-/**
- * @brief Test replace function for invalid indices and NULL vector.
- */
-void test_mu_pvec_replace_invalid(void) {
-    mu_pvec_push(&test_vector, &item1); // count is 1
-
-    mu_pvec_err_t err = mu_pvec_replace(&test_vector, 1, &item2); // Index > count - 1
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_INDEX, err);
-
-    err = mu_pvec_replace(&test_vector, 10, &item2); // Index far out of bounds
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_INDEX, err);
-
-    err = mu_pvec_replace(NULL, 0, &item1); // NULL vector pointer
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, err);
-}
-
-void test_mu_pvec_replace(void) {
-    // Setup: Initialize pvector with some pointers
-    void* storage[5];
+void test_mu_pvec_init_and_basic_properties(void) {
+    void *storage[3];
     mu_pvec_t v;
-    mu_pvec_init(&v, storage, 5);
 
-    void* ptr1 = &obj1; // Pointer to int
-    void* ptr2 = &obj2; // Pointer to float
-    void* ptr3 = (void*)obj3; // Pointer to const char*
+    /* init with capacity 3 */
+    TEST_ASSERT_NOT_NULL(mu_pvec_init(&v, storage, 3));
+    TEST_ASSERT_EQUAL_size_t(3, mu_pvec_capacity(&v));
+    TEST_ASSERT_EQUAL_size_t(0, mu_pvec_count(&v));
+    TEST_ASSERT_TRUE(mu_pvec_is_empty(&v));
+    TEST_ASSERT_FALSE(mu_pvec_is_full(&v));
+}
 
-    mu_pvec_push(&v, ptr1); // v: [ptr1]
-    mu_pvec_push(&v, ptr2); // v: [ptr1, ptr2]
-    mu_pvec_push(&v, ptr3); // v: [ptr1, ptr2, ptr3]
+void test_mu_pvec_push_pop_ref_clear(void) {
+    void *storage[2];
+    mu_pvec_t v;
+    mu_pvec_init(&v, storage, 2);
 
-    TEST_ASSERT_EQUAL_size_t(3, mu_pvec_count(&v));
+    int a = 10, b = 20;
+    void *pA = &a, *pB = &b;
+    /* push two items */
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, mu_pvec_push(&v, pA));
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, mu_pvec_push(&v, pB));
+    TEST_ASSERT_EQUAL_size_t(2, mu_pvec_count(&v));
+    TEST_ASSERT_TRUE(mu_pvec_is_full(&v));
 
-    void* new_ptr = func_ptr; // Pointer to a function
+    /* ref them */
+    void *out0 = NULL, *out1 = NULL;
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, mu_pvec_ref(&v, 0, &out0));
+    TEST_ASSERT_EQUAL_PTR(pA, out0);
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, mu_pvec_ref(&v, 1, &out1));
+    TEST_ASSERT_EQUAL_PTR(pB, out1);
+
+    /* pop in reverse order */
+    void *popped = NULL;
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, mu_pvec_pop(&v, &popped));
+    TEST_ASSERT_EQUAL_PTR(pB, popped);
+    TEST_ASSERT_EQUAL_size_t(1, mu_pvec_count(&v));
+
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, mu_pvec_pop(&v, &popped));
+    TEST_ASSERT_EQUAL_PTR(pA, popped);
+    TEST_ASSERT_EQUAL_size_t(0, mu_pvec_count(&v));
+    TEST_ASSERT_TRUE(mu_pvec_is_empty(&v));
+
+    /* pop from empty */
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_EMPTY, mu_pvec_pop(&v, &popped));
+
+    /* clear on empty is fine */
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, mu_pvec_clear(&v));
+    TEST_ASSERT_EQUAL_size_t(0, mu_pvec_count(&v));
+}
+
+void test_mu_pvec_insert_delete(void) {
+    void *storage[4];
+    mu_pvec_t v;
+    mu_pvec_init(&v, storage, 4);
+
+    int a = 1, b = 2, c = 3, d = 4;
+    void *pA = &a, *pB = &b, *pC = &c, *pD = &d;
     mu_pvec_err_t err;
 
-    // Test 1: Replace with a valid index (index 1)
-    // v: [ptr1, ptr2, ptr3]
-    // Replace item at index 1 (ptr2) with new_ptr
-    err = mu_pvec_replace(&v, 1, new_ptr);
+    /* insert at beginning */
+    err = mu_pvec_insert(&v, 0, pB);
     TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-
-    // After replace:
-    // v should be: [ptr1, new_ptr, ptr3]
-    TEST_ASSERT_EQUAL_size_t(3, mu_pvec_count(&v)); // Count should be unchanged
-
-    void* item_at_0, *item_at_1, *item_at_2;
-    mu_pvec_ref(&v, 0, &item_at_0); // Should be ptr1
-    mu_pvec_ref(&v, 1, &item_at_1); // Should be new_ptr
-    mu_pvec_ref(&v, 2, &item_at_2); // Should be ptr3
-
-    TEST_ASSERT_EQUAL_PTR(ptr1, item_at_0);
-    TEST_ASSERT_EQUAL_PTR(new_ptr, item_at_1);
-    TEST_ASSERT_EQUAL_PTR(ptr3, item_at_2);
-
-    // Test 2: Replace with index 0
-    void* new_ptr_2 = &obj2; // Pointer to float obj again
-    err = mu_pvec_replace(&v, 0, new_ptr_2);
+    err = mu_pvec_insert(&v, 0, pA);
     TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    // v should be: [new_ptr_2, new_ptr, ptr3]
-    mu_pvec_ref(&v, 0, &item_at_0);
-    TEST_ASSERT_EQUAL_PTR(new_ptr_2, item_at_0);
+    /* v: [A, B] */
 
-
-    // Test 3: Replace with last index (index 2)
-    void* new_ptr_3 = &obj1; // Pointer to int obj again
-    err = mu_pvec_replace(&v, 2, new_ptr_3);
+    /* insert at end */
+    err = mu_pvec_insert(&v, 2, pD);
     TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    // v should be: [new_ptr_2, new_ptr, new_ptr_3]
-    mu_pvec_ref(&v, 2, &item_at_2);
-    TEST_ASSERT_EQUAL_PTR(new_ptr_3, item_at_2);
+    /* v: [A, B, D] */
 
+    /* insert in middle */
+    err = mu_pvec_insert(&v, 2, pC);
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
+    /* v: [A, B, C, D] */
 
-    // Test 4: Replace when v is NULL
-    err = mu_pvec_replace(NULL, 0, new_ptr);
+    TEST_ASSERT_TRUE(mu_pvec_is_full(&v));
+    TEST_ASSERT_EQUAL_size_t(4, mu_pvec_count(&v));
+
+    /* out-of-bounds insert */
+    err = mu_pvec_insert(&v, 5, pA);
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_INDEX, err);
+    err = mu_pvec_insert(NULL, 0, pA);
     TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, err);
 
-    // Test 5: Replace when item_in is NULL
-    err = mu_pvec_replace(&v, 0, NULL);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, err);
+    /* delete each in turn */
+    void *out = NULL;
+    err = mu_pvec_delete(&v, 0, &out);
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
+    TEST_ASSERT_EQUAL_PTR(pA, out);
+    /* v: [B, C, D] */
 
-    // Test 6: Replace with index out of bounds (index == count)
-    err = mu_pvec_replace(&v, mu_pvec_count(&v), new_ptr);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_INDEX, err);
+    err = mu_pvec_delete(&v, 1, &out);
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
+    TEST_ASSERT_EQUAL_PTR(pC, out);
+    /* v: [B, D] */
 
-    // Test 7: Replace with index out of bounds (index > count)
-    err = mu_pvec_replace(&v, mu_pvec_count(&v) + 1, new_ptr);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_INDEX, err);
+    err = mu_pvec_delete(&v, 1, NULL);
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
+    /* v: [B] */
 
-    // Test 8: Replace when pvector is empty
-    mu_pvec_clear(&v);
+    err = mu_pvec_delete(&v, 0, &out);
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
+    TEST_ASSERT_EQUAL_PTR(pB, out);
     TEST_ASSERT_EQUAL_size_t(0, mu_pvec_count(&v));
-    err = mu_pvec_replace(&v, 0, new_ptr);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_EMPTY, err); // Or INDEX, but EMPTY is more specific
 
-    // Test 9: Replace when pvector is empty with index > 0
-    err = mu_pvec_replace(&v, 5, new_ptr);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_EMPTY, err); // Or INDEX
+    /* delete from empty */
+    err = mu_pvec_delete(&v, 0, &out);
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_INDEX, err);
+    err = mu_pvec_delete(NULL, 0, &out);
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, err);
 }
 
-/**
- * @brief Test push function for adding elements.
- */
-void test_mu_pvec_push_success(void) {
-    TEST_ASSERT_EQUAL(0, mu_pvec_count(&test_vector));
+void test_mu_pvec_replace_swap(void) {
+    void *storage[3];
+    mu_pvec_t v;
+    mu_pvec_init(&v, storage, 3);
 
-    mu_pvec_err_t err = mu_pvec_push(&test_vector, &item1);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_EQUAL(1, mu_pvec_count(&test_vector));
-    TEST_ASSERT_EQUAL_PTR(&item1, test_vector.item_store[0]);
+    int x = 100, y = 200, z = 300;
+    void *pX = &x, *pY = &y, *pZ = &z;
 
-    err = mu_pvec_push(&test_vector, &item2);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_EQUAL(2, mu_pvec_count(&test_vector));
-    TEST_ASSERT_EQUAL_PTR(&item2, test_vector.item_store[1]);
+    /* setup v = [X, Y, Z] */
+    mu_pvec_push(&v, pX);
+    mu_pvec_push(&v, pY);
+    mu_pvec_push(&v, pZ);
+
+    /* replace index 1 */
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, mu_pvec_replace(&v, 1, pZ));
+    void *tmp = NULL;
+    mu_pvec_ref(&v, 1, &tmp);
+    TEST_ASSERT_EQUAL_PTR(pZ, tmp);
+
+    /* swap index 0 with pY */
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, mu_pvec_swap(&v, 0, &pY));
+    /* now v[0] == old pY, and pY == old pX */
+    mu_pvec_ref(&v, 0, &tmp);
+    TEST_ASSERT_EQUAL_PTR(&y, tmp);
+    TEST_ASSERT_EQUAL_PTR(&x, pY);
+
+    /* param checks */
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, mu_pvec_replace(NULL, 0, pX));
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_INDEX, mu_pvec_replace(&v, 5, pX));
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, mu_pvec_swap(&v, 0, NULL));
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_INDEX, mu_pvec_swap(&v, 3, &pX));
 }
 
-/**
- * @brief Test push function when vector is full.
- */
+void test_mu_pvec_peek_and_find(void) {
+    void *storage[4];
+    mu_pvec_t v;
+    mu_pvec_init(&v, storage, 4);
+
+    int a = 7, b = 8, c = 9;
+    void *pA = &a, *pB = &b, *pC = &c;
+
+    mu_pvec_push(&v, pA);
+    mu_pvec_push(&v, pB);
+    mu_pvec_push(&v, pC);
+
+    /* peek does not change count */
+    void *peeked = NULL;
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, mu_pvec_peek(&v, &peeked));
+    TEST_ASSERT_EQUAL_PTR(pC, peeked);
+    TEST_ASSERT_EQUAL_size_t(3, mu_pvec_count(&v));
+
+    /* find existing */
+    size_t idx = SIZE_MAX;
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, mu_pvec_find(&v, find_eq, pB, &idx));
+    TEST_ASSERT_EQUAL_size_t(1, idx);
+    /* find non-existent */
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_NOTFOUND,
+                      mu_pvec_find(&v, find_eq, NULL, &idx));
+
+    /* rfind works */
+    mu_pvec_push(&v, pB); /* v: [A,B,C,B] */
+    TEST_ASSERT_EQUAL_size_t(4, mu_pvec_count(&v));
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, mu_pvec_rfind(&v, find_eq, pB, &idx));
+    TEST_ASSERT_EQUAL_size_t(3, idx);
+
+    /* param checks */
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, mu_pvec_peek(NULL, &peeked));
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM,
+                      mu_pvec_find(NULL, find_eq, pA, &idx));
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, mu_pvec_find(&v, NULL, pA, &idx));
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, mu_pvec_find(&v, find_eq, pA, NULL));
+}
+
+void test_mu_pvec_sort_and_reverse(void) {
+    void *storage[4];
+    mu_pvec_t v;
+    mu_pvec_init(&v, storage, 4);
+
+    int a = 3, b = 1, c = 2;
+    void *pA = &a, *pB = &b, *pC = &c;
+    /* start with [A,B,C] in mixed order A(3),B(1),C(2) */
+    mu_pvec_push(&v, pA);
+    mu_pvec_push(&v, pB);
+    mu_pvec_push(&v, pC);
+
+    /* sort ascending by integer value: [B,A,C] => [1,3,2] sorted-> [B,C,A] */
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, mu_pvec_sort(&v, cmp_ints));
+    void *out0, *out1, *out2;
+    mu_pvec_ref(&v, 0, &out0);
+    mu_pvec_ref(&v, 1, &out1);
+    mu_pvec_ref(&v, 2, &out2);
+    TEST_ASSERT_EQUAL_PTR(pB, out0);
+    TEST_ASSERT_EQUAL_PTR(pC, out1);
+    TEST_ASSERT_EQUAL_PTR(pA, out2);
+
+    /* reverse: [A,C,B] */
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, mu_pvec_reverse(&v));
+    mu_pvec_ref(&v, 0, &out0);
+    mu_pvec_ref(&v, 1, &out1);
+    mu_pvec_ref(&v, 2, &out2);
+    TEST_ASSERT_EQUAL_PTR(pA, out0);
+    TEST_ASSERT_EQUAL_PTR(pC, out1);
+    TEST_ASSERT_EQUAL_PTR(pB, out2);
+
+    /* param checks */
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, mu_pvec_sort(NULL, cmp_ints));
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, mu_pvec_sort(&v, NULL));
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, mu_pvec_reverse(NULL));
+}
+
+// *****************************************************************************
+// mu_pvec_sorted_insert
+
+void test_mu_pvec_insert_any_keeps_sorted(void) {
+    void *storage[CAP];
+    mu_pvec_t v;
+    TEST_ASSERT_NOT_NULL(mu_pvec_init(&v, storage, CAP));
+
+    item_t A = {.value = 5, .id = 100};
+    item_t B = {.value = 1, .id = 101};
+    item_t C = {.value = 3, .id = 102};
+
+    TEST_ASSERT_EQUAL(
+        MU_STORE_ERR_NONE,
+        mu_pvec_sorted_insert(&v, &A, cmp_item, MU_STORE_INSERT_ANY));
+    TEST_ASSERT_EQUAL(
+        MU_STORE_ERR_NONE,
+        mu_pvec_sorted_insert(&v, &B, cmp_item, MU_STORE_INSERT_ANY));
+    TEST_ASSERT_EQUAL(
+        MU_STORE_ERR_NONE,
+        mu_pvec_sorted_insert(&v, &C, cmp_item, MU_STORE_INSERT_ANY));
+
+    /* After inserting B(1), C(3), A(5) in ANY mode, vector should be sorted by
+     * value */
+    TEST_ASSERT_EQUAL_size_t(3, mu_pvec_count(&v));
+
+    item_t *out;
+    mu_pvec_ref(&v, 0, (void **)&out);
+    TEST_ASSERT_EQUAL_INT(1, out->value);
+    mu_pvec_ref(&v, 1, (void **)&out);
+    TEST_ASSERT_EQUAL_INT(3, out->value);
+    mu_pvec_ref(&v, 2, (void **)&out);
+    TEST_ASSERT_EQUAL_INT(5, out->value);
+}
+
+void test_mu_pvec_insert_first_and_last_on_duplicate(void) {
+    void *storage[CAP];
+    mu_pvec_t v;
+    mu_pvec_init(&v, storage, CAP);
+
+    item_t B1 = {.value = 2, .id = 10};
+    item_t B2 = {.value = 2, .id = 20};
+    item_t B3 = {.value = 2, .id = 30};
+
+    /* First insert two duplicates in ANY mode */
+    mu_pvec_sorted_insert(&v, &B1, cmp_item, MU_STORE_INSERT_ANY);
+    mu_pvec_sorted_insert(&v, &B2, cmp_item, MU_STORE_INSERT_ANY);
+    /* v = [B1, B2] */
+
+    /* INSERT_FIRST should put B3 before both B1 and B2 */
+    TEST_ASSERT_EQUAL(
+        MU_STORE_ERR_NONE,
+        mu_pvec_sorted_insert(&v, &B3, cmp_item, MU_STORE_INSERT_FIRST));
+    TEST_ASSERT_EQUAL_size_t(3, mu_pvec_count(&v));
+    item_t *out;
+    mu_pvec_ref(&v, 0, (void **)&out);
+    TEST_ASSERT_EQUAL_INT(30, out->id);
+
+    /* INSERT_LAST should put next duplicate at end of existing equals */
+    item_t B4 = {.value = 2, .id = 40};
+    TEST_ASSERT_EQUAL(
+        MU_STORE_ERR_NONE,
+        mu_pvec_sorted_insert(&v, &B4, cmp_item, MU_STORE_INSERT_LAST));
+    TEST_ASSERT_EQUAL_size_t(4, mu_pvec_count(&v));
+    mu_pvec_ref(&v, 3, (void **)&out);
+    TEST_ASSERT_EQUAL_INT(40, out->id);
+}
+
+void test_mu_pvec_insert_unique_and_duplicate(void) {
+    void *storage[CAP];
+    mu_pvec_t v;
+    mu_pvec_init(&v, storage, CAP);
+
+    item_t X = {.value = 7, .id = 7};
+    item_t Y = {.value = 7, .id = 8};
+
+    /* UNIQUE: first time ok, second time error */
+    TEST_ASSERT_EQUAL(
+        MU_STORE_ERR_NONE,
+        mu_pvec_sorted_insert(&v, &X, cmp_item, MU_STORE_INSERT_UNIQUE));
+    TEST_ASSERT_EQUAL(
+        MU_STORE_ERR_EXISTS,
+        mu_pvec_sorted_insert(&v, &Y, cmp_item, MU_STORE_INSERT_UNIQUE));
+    TEST_ASSERT_EQUAL_size_t(1, mu_pvec_count(&v));
+
+    /* DUPLICATE: since X.value == Y.value, DUPLICATE now succeeds */
+    TEST_ASSERT_EQUAL(
+        MU_STORE_ERR_NONE,
+        mu_pvec_sorted_insert(&v, &Y, cmp_item, MU_STORE_INSERT_DUPLICATE));
+    TEST_ASSERT_EQUAL_size_t(2, mu_pvec_count(&v));
+
+    /* Now insert via ANY to get a match, then DUPLICATE works */
+    TEST_ASSERT_EQUAL(
+        MU_STORE_ERR_NONE,
+        mu_pvec_sorted_insert(&v, &Y, cmp_item, MU_STORE_INSERT_ANY));
+    TEST_ASSERT_EQUAL_size_t(3, mu_pvec_count(&v));
+    TEST_ASSERT_EQUAL(
+        MU_STORE_ERR_NONE,
+        mu_pvec_sorted_insert(&v, &Y, cmp_item, MU_STORE_INSERT_DUPLICATE));
+    TEST_ASSERT_EQUAL_size_t(4, mu_pvec_count(&v));
+}
+
+void test_mu_pvec_update_first_last_all(void) {
+    void *storage[CAP];
+    mu_pvec_t v;
+    mu_pvec_init(&v, storage, CAP);
+
+    item_t A = {.value = 1, .id = 11};
+    item_t B1 = {.value = 2, .id = 21};
+    item_t B2 = {.value = 2, .id = 22};
+    item_t C = {.value = 3, .id = 31};
+
+    /* build [A, B1, B2, C] */
+    mu_pvec_sorted_insert(&v, &A, cmp_item, MU_STORE_INSERT_ANY);
+    mu_pvec_sorted_insert(&v, &B1, cmp_item, MU_STORE_INSERT_ANY);
+    mu_pvec_sorted_insert(&v, &B2, cmp_item, MU_STORE_INSERT_ANY);
+    mu_pvec_sorted_insert(&v, &C, cmp_item, MU_STORE_INSERT_ANY);
+
+    /* UPDATE_FIRST: change B1 -> Bnew */
+    item_t Bnew1 = {.value = 2, .id = 99};
+    TEST_ASSERT_EQUAL(
+        MU_STORE_ERR_NONE,
+        mu_pvec_sorted_insert(&v, &Bnew1, cmp_item, MU_STORE_UPDATE_FIRST));
+    item_t *out;
+    mu_pvec_ref(&v, 1, (void **)&out);
+    TEST_ASSERT_EQUAL_INT(99, out->id);
+
+    /* UPDATE_LAST: change B2 -> Bnew2 */
+    item_t Bnew2 = {.value = 2, .id = 88};
+    TEST_ASSERT_EQUAL(
+        MU_STORE_ERR_NONE,
+        mu_pvec_sorted_insert(&v, &Bnew2, cmp_item, MU_STORE_UPDATE_LAST));
+    mu_pvec_ref(&v, 2, (void **)&out);
+    TEST_ASSERT_EQUAL_INT(88, out->id);
+
+    /* UPDATE_ALL: change all 2's -> Ball */
+    item_t Ball = {.value = 2, .id = 77};
+    TEST_ASSERT_EQUAL(
+        MU_STORE_ERR_NONE,
+        mu_pvec_sorted_insert(&v, &Ball, cmp_item, MU_STORE_UPDATE_ALL));
+    mu_pvec_ref(&v, 1, (void **)&out);
+    TEST_ASSERT_EQUAL_INT(77, out->id);
+    mu_pvec_ref(&v, 2, (void **)&out);
+    TEST_ASSERT_EQUAL_INT(77, out->id);
+}
+
+void test_mu_pvec_upsert_first_and_last(void) {
+    void *storage[CAP];
+    mu_pvec_t v;
+    mu_pvec_init(&v, storage, CAP);
+
+    item_t A = {.value = 1, .id = 11};
+    item_t B = {.value = 2, .id = 22};
+    /* build [A,B] */
+    mu_pvec_sorted_insert(&v, &A, cmp_item, MU_STORE_INSERT_ANY);
+    mu_pvec_sorted_insert(&v, &B, cmp_item, MU_STORE_INSERT_ANY);
+
+    /* UPSERT_FIRST on existing B => update it */
+    item_t Bup1 = {.value = 2, .id = 55};
+    TEST_ASSERT_EQUAL(
+        MU_STORE_ERR_NONE,
+        mu_pvec_sorted_insert(&v, &Bup1, cmp_item, MU_STORE_UPSERT_FIRST));
+    item_t *out;
+    mu_pvec_ref(&v, 1, (void **)&out);
+    TEST_ASSERT_EQUAL_INT(55, out->id);
+
+    /* UPSERT_LAST on non-existent => insert at end */
+    item_t Cup = {.value = 3, .id = 33};
+    TEST_ASSERT_EQUAL(
+        MU_STORE_ERR_NONE,
+        mu_pvec_sorted_insert(&v, &Cup, cmp_item, MU_STORE_UPSERT_LAST));
+    TEST_ASSERT_EQUAL_size_t(3, mu_pvec_count(&v));
+    mu_pvec_ref(&v, 2, (void **)&out);
+    TEST_ASSERT_EQUAL_INT(33, out->id);
+}
+
+// *****************************************************************************
+// Edge cases
+
+//----------------------------------------------------------------------------//
+// mu_pvec_init: NULL / zero-capacity
+
+void test_mu_pvec_init_null_v(void) {
+    void *store[1];
+    TEST_ASSERT_NULL(mu_pvec_init(NULL, store, 1));
+}
+
+void test_mu_pvec_init_null_store(void) {
+    mu_pvec_t v;
+    TEST_ASSERT_NULL(mu_pvec_init(&v, NULL, 1));
+}
+
+void test_mu_pvec_init_zero_capacity(void) {
+    void *store[1];
+    mu_pvec_t v;
+    TEST_ASSERT_NULL(mu_pvec_init(&v, store, 0));
+}
+
+//----------------------------------------------------------------------------//
+// mu_pvec_is_empty / is_full on NULL
+
+void test_mu_pvec_is_empty_null(void) {
+    TEST_ASSERT_TRUE(mu_pvec_is_empty(NULL));
+}
+
+void test_mu_pvec_is_full_null(void) {
+    TEST_ASSERT_FALSE(mu_pvec_is_full(NULL));
+}
+
+//----------------------------------------------------------------------------//
+// mu_pvec_clear
+
+void test_mu_pvec_clear_null(void) {
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, mu_pvec_clear(NULL));
+}
+
+//----------------------------------------------------------------------------//
+// mu_pvec_ref: NULL params & out-of-bounds
+
+void test_mu_pvec_ref_param_errors(void) {
+    void *store[2];
+    mu_pvec_t v;
+    mu_pvec_init(&v, store, 2);
+
+    void *out;
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, mu_pvec_ref(NULL, 0, &out));
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, mu_pvec_ref(&v, 0, NULL));
+}
+
+void test_mu_pvec_ref_index_oob(void) {
+    void *store[2];
+    mu_pvec_t v;
+    mu_pvec_init(&v, store, 2);
+    // count == 0 initially => index 0 is out of bounds
+    void *out;
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_INDEX, mu_pvec_ref(&v, 0, &out));
+}
+
+//----------------------------------------------------------------------------//
+// mu_pvec_insert: NULL v, index > count
+
+void test_mu_pvec_insert_null(void) {
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, mu_pvec_insert(NULL, 0, (void *)123));
+}
+
+void test_mu_pvec_insert_index_too_large(void) {
+    void *store[2];
+    mu_pvec_t v;
+    mu_pvec_init(&v, store, 2);
+    // count == 0, so only index==0 allowed
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_INDEX, mu_pvec_insert(&v, 1, (void *)123));
+}
+
+//----------------------------------------------------------------------------//
+// mu_pvec_delete: NULL v, index>=count, item_out == NULL
+
+void test_mu_pvec_delete_null(void) {
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, mu_pvec_delete(NULL, 0, NULL));
+}
+
+void test_mu_pvec_delete_index_too_large(void) {
+    void *store[1];
+    mu_pvec_t v;
+    mu_pvec_init(&v, store, 1);
+    // empty => count==0 => index 0 too large
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_INDEX, mu_pvec_delete(&v, 0, NULL));
+}
+
+void test_mu_pvec_delete_with_null_outptr(void) {
+    void *store[2];
+    mu_pvec_t v;
+    mu_pvec_init(&v, store, 2);
+    // push one item so delete succeeds
+    mu_pvec_push(&v, (void *)0xdead);
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, mu_pvec_delete(&v, 0, NULL));
+    TEST_ASSERT_EQUAL_size_t(0, mu_pvec_count(&v));
+}
+
+//----------------------------------------------------------------------------//
+// mu_pvec_push: NULL v and FULL
+
+void test_mu_pvec_push_null(void) {
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, mu_pvec_push(NULL, (void *)1));
+}
+
 void test_mu_pvec_push_full(void) {
-    // Fill the vector
-    for (size_t i = 0; i < TEST_PVEC_CAPACITY; ++i) {
-        mu_pvec_push(&test_vector, &item1); // Push dummy item
-    }
-    TEST_ASSERT_EQUAL(TEST_PVEC_CAPACITY, mu_pvec_count(&test_vector));
-
-    // Attempt to push one more element
-    mu_pvec_err_t err = mu_pvec_push(&test_vector, &item2);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_FULL, err);
-    TEST_ASSERT_EQUAL(TEST_PVEC_CAPACITY, mu_pvec_count(&test_vector)); // Count should not change
-}
-
-/**
- * @brief Test push function with NULL vector.
- */
-void test_mu_pvec_push_invalid_param(void) {
-    mu_pvec_err_t err = mu_pvec_push(NULL, &item1);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, err);
-}
-
-/**
- * @brief Test pop function for removing elements.
- */
-void test_mu_pvec_pop_success(void) {
-    mu_pvec_push(&test_vector, &item1); // [item1]
-    mu_pvec_push(&test_vector, &item2); // [item1, item2]
-    TEST_ASSERT_EQUAL(2, mu_pvec_count(&test_vector));
-
-    void *popped_item = NULL;
-    mu_pvec_err_t err = mu_pvec_pop(&test_vector, &popped_item);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_EQUAL_PTR(&item2, popped_item); // Should pop the last item pushed
-    TEST_ASSERT_EQUAL(1, mu_pvec_count(&test_vector));
-
-    popped_item = NULL;
-    err = mu_pvec_pop(&test_vector, &popped_item);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_EQUAL_PTR(&item1, popped_item); // Should pop the next last item
-    TEST_ASSERT_EQUAL(0, mu_pvec_count(&test_vector));
-}
-
-/**
- * @brief Test pop function when vector is empty.
- */
-void test_mu_pvec_pop_empty(void) {
-    TEST_ASSERT_EQUAL(0, mu_pvec_count(&test_vector));
-
-    void *popped_item = NULL;
-    mu_pvec_err_t err = mu_pvec_pop(&test_vector, &popped_item);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_EMPTY, err);
-    TEST_ASSERT_NULL(popped_item); // Output parameter should not be written
-    TEST_ASSERT_EQUAL(0, mu_pvec_count(&test_vector));
-}
-
-/**
- * @brief Test pop function with invalid parameters.
- */
-void test_mu_pvec_pop_invalid_params(void) {
-    void *popped_item = NULL;
-    mu_pvec_push(&test_vector, &item1); // Make vector non-empty
-
-    mu_pvec_err_t err = mu_pvec_pop(NULL, &popped_item); // NULL vector
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, err);
-    TEST_ASSERT_NULL(popped_item); // Output parameter should not be written
-
-    err = mu_pvec_pop(&test_vector, NULL); // NULL item output pointer
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, err);
-}
-
-void test_mu_pvec_peek(void) {
-    // Setup: Initialize pvector with some pointers
-    void* storage[5];
+    void *store[2];
     mu_pvec_t v;
-    mu_pvec_init(&v, storage, 5);
+    mu_pvec_init(&v, store, 2);
+    mu_pvec_push(&v, (void *)10);
+    mu_pvec_push(&v, (void *)20);
+    // now full
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_FULL, mu_pvec_push(&v, (void *)30));
+}
 
-    void* ptr1 = &obj1; // Pointer to int
-    void* ptr2 = &obj2; // Pointer to float
-    void* ptr3 = (void*)obj3; // Pointer to const char*
+//----------------------------------------------------------------------------//
+// mu_pvec_pop: (v==NULL || item==NULL), empty
 
-    mu_pvec_push(&v, ptr1); // v: [ptr1]
-    mu_pvec_push(&v, ptr2); // v: [ptr1, ptr2]
-    mu_pvec_push(&v, ptr3); // v: [ptr1, ptr2, ptr3]
+void test_mu_pvec_pop_null_args(void) {
+    void *store[1];
+    mu_pvec_t v;
+    mu_pvec_init(&v, store, 1);
+    mu_pvec_push(&v, (void *)10);
 
-    TEST_ASSERT_EQUAL_size_t(3, mu_pvec_count(&v));
-
-    void* peeked_ptr;
-    mu_pvec_err_t err;
-    size_t count_before_peek;
-
-    // Test 1: Peek when pvector is not empty
-    // Last item is ptr3 at index 2
-    count_before_peek = mu_pvec_count(&v);
-    err = mu_pvec_peek(&v, &peeked_ptr);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-
-    // Check the peeked item's content (the pointer value)
-    TEST_ASSERT_EQUAL_PTR(ptr3, peeked_ptr);
-
-    // Check that the pvector count has not changed
-    TEST_ASSERT_EQUAL_size_t(count_before_peek, mu_pvec_count(&v));
-
-    // Test 2: Peek when v is NULL
-    err = mu_pvec_peek(NULL, &peeked_ptr);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, err);
-
-    // Test 3: Peek when item_out is NULL
-    err = mu_pvec_peek(&v, NULL);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, err);
-
-    // Test 4: Peek when pvector is empty
-    mu_pvec_clear(&v);
+    void *out;
+    TEST_ASSERT_EQUAL_size_t(1, mu_pvec_count(&v));
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, mu_pvec_pop(NULL, &out));
+    TEST_ASSERT_EQUAL_size_t(1, mu_pvec_count(&v));
+    // pop with a NULL destination simply discards the element without copying
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, mu_pvec_pop(&v, NULL));
     TEST_ASSERT_EQUAL_size_t(0, mu_pvec_count(&v));
-    // Initialize peeked_ptr to a known value before the call to see if it changes on error
-    peeked_ptr = (void*)0xDEADBEEF;
-    err = mu_pvec_peek(&v, &peeked_ptr);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_EMPTY, err);
-    // The value pointed to by item_out should not have been written to on error
-    TEST_ASSERT_EQUAL_PTR((void*)0xDEADBEEF, peeked_ptr);
-
-     // Test 5: Peek with only one item in pvector
-     mu_pvec_push(&v, ptr1); // v: [ptr1]
-     TEST_ASSERT_EQUAL_size_t(1, mu_pvec_count(&v));
-     count_before_peek = mu_pvec_count(&v);
-     err = mu_pvec_peek(&v, &peeked_ptr);
-     TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-     TEST_ASSERT_EQUAL_PTR(ptr1, peeked_ptr);
-     TEST_ASSERT_EQUAL_size_t(count_before_peek, mu_pvec_count(&v));
 }
 
-/**
- * @brief Test insert function at various positions.
- */
-void test_mu_pvec_insert_success(void) {
-    mu_pvec_push(&test_vector, &item1); // [item1]
-    mu_pvec_push(&test_vector, &item3); // [item1, item3]
-    TEST_ASSERT_EQUAL(2, mu_pvec_count(&test_vector));
-
-    // Insert at the beginning (index 0)
-    mu_pvec_err_t err = mu_pvec_insert(&test_vector, 0, &item4); // [item4, item1, item3]
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_EQUAL(3, mu_pvec_count(&test_vector));
-    TEST_ASSERT_EQUAL_PTR(&item4, test_vector.item_store[0]);
-    TEST_ASSERT_EQUAL_PTR(&item1, test_vector.item_store[1]);
-    TEST_ASSERT_EQUAL_PTR(&item3, test_vector.item_store[2]);
-
-    // Insert in the middle (index 2)
-    mu_pvec_err_t err2 = mu_pvec_insert(&test_vector, 2, &item2); // [item4, item1, item2, item3]
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err2);
-    TEST_ASSERT_EQUAL(4, mu_pvec_count(&test_vector));
-    TEST_ASSERT_EQUAL_PTR(&item4, test_vector.item_store[0]);
-    TEST_ASSERT_EQUAL_PTR(&item1, test_vector.item_store[1]);
-    TEST_ASSERT_EQUAL_PTR(&item2, test_vector.item_store[2]);
-    TEST_ASSERT_EQUAL_PTR(&item3, test_vector.item_store[3]);
-
-    // Insert at the end (index == count)
-    mu_pvec_err_t err3 = mu_pvec_insert(&test_vector, mu_pvec_count(&test_vector), &item5); // [item4, item1, item2, item3, item5]
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err3);
-    TEST_ASSERT_EQUAL(5, mu_pvec_count(&test_vector));
-    TEST_ASSERT_EQUAL_PTR(&item5, test_vector.item_store[4]);
+void test_mu_pvec_pop_empty(void) {
+    void *store[1];
+    mu_pvec_t v;
+    mu_pvec_init(&v, store, 1);
+    void *out;
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_EMPTY, mu_pvec_pop(&v, &out));
 }
 
-/**
- * @brief Test insert function when vector is full.
- */
-void test_mu_pvec_insert_full(void) {
-    // Fill the vector
-    for (size_t i = 0; i < TEST_PVEC_CAPACITY; ++i) {
-        mu_pvec_push(&test_vector, &item1); // Push dummy item
-    }
-    TEST_ASSERT_EQUAL(TEST_PVEC_CAPACITY, mu_pvec_count(&test_vector));
+//----------------------------------------------------------------------------//
+// mu_pvec_rfind: NULL params and NOTFOUND
 
-    // Attempt to insert one more element
-    mu_pvec_err_t err = mu_pvec_insert(&test_vector, 0, &item2);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_FULL, err);
-    TEST_ASSERT_EQUAL(TEST_PVEC_CAPACITY, mu_pvec_count(&test_vector)); // Count should not change
+static bool always_false(const void *item, const void *arg) {
+    (void)item;
+    (void)arg;
+    return false;
 }
 
-/**
- * @brief Test insert function with invalid parameters/indices.
- */
-void test_mu_pvec_insert_invalid_params_or_index(void) {
-    mu_pvec_push(&test_vector, &item1); // count is 1
+void test_mu_pvec_rfind_param_and_notfound(void) {
+    void *store[3];
+    mu_pvec_t v;
+    mu_pvec_init(&v, store, 3);
 
-    // Test NULL vector
-    mu_pvec_err_t err = mu_pvec_insert(NULL, 0, &item2);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, err);
+    size_t idx;
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM,
+                      mu_pvec_rfind(NULL, always_false, NULL, &idx));
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, mu_pvec_rfind(&v, NULL, NULL, &idx));
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM,
+                      mu_pvec_rfind(&v, always_false, NULL, NULL));
 
-    // Test index > count (when not full)
-    err = mu_pvec_insert(&test_vector, mu_pvec_count(&test_vector) + 1, &item2);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_INDEX, err);
-    TEST_ASSERT_EQUAL(1, mu_pvec_count(&test_vector)); // Count should not change
-
-    // Test index far out of bounds
-    err = mu_pvec_insert(&test_vector, TEST_PVEC_CAPACITY + 5, &item2);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_INDEX, err);
-    TEST_ASSERT_EQUAL(1, mu_pvec_count(&test_vector)); // Count should not change
+    // no elements => notfound
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_NOTFOUND,
+                      mu_pvec_rfind(&v, always_false, NULL, &idx));
 }
 
-/**
- * @brief Test delete function at various positions.
- */
-void test_mu_pvec_delete_success(void) {
-    void *items[] = {&item1, &item2, &item3, &item4};
-    populate_vector_with_pointers(&test_vector, items, 4); // [item1, item2, item3, item4]
-    TEST_ASSERT_EQUAL(4, mu_pvec_count(&test_vector));
+//----------------------------------------------------------------------------//
+// mu_pvec_sort: NULL params, short arrays (<2)
 
-    void *deleted_item = NULL;
-    mu_pvec_err_t err = mu_pvec_delete(&test_vector, 1, &deleted_item); // Delete item2 at index 1: [item1, item3, item4]
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_EQUAL_PTR(&item2, deleted_item);
-    TEST_ASSERT_EQUAL(3, mu_pvec_count(&test_vector));
-    TEST_ASSERT_EQUAL_PTR(&item1, test_vector.item_store[0]);
-    TEST_ASSERT_EQUAL_PTR(&item3, test_vector.item_store[1]);
-    TEST_ASSERT_EQUAL_PTR(&item4, test_vector.item_store[2]);
+void test_mu_pvec_sort_param_and_short(void) {
+    void *store[2];
+    mu_pvec_t v;
+    mu_pvec_init(&v, store, 2);
 
-    deleted_item = NULL;
-    err = mu_pvec_delete(&test_vector, 0, &deleted_item); // Delete item1 at index 0: [item3, item4]
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_EQUAL_PTR(&item1, deleted_item);
-    TEST_ASSERT_EQUAL(2, mu_pvec_count(&test_vector));
-    TEST_ASSERT_EQUAL_PTR(&item3, test_vector.item_store[0]);
-    TEST_ASSERT_EQUAL_PTR(&item4, test_vector.item_store[1]);
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, mu_pvec_sort(NULL, (void *)1));
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, mu_pvec_sort(&v, NULL));
 
-    deleted_item = NULL;
-    err = mu_pvec_delete(&test_vector, 1, NULL); // Delete item4 at index 1 (last), item output is NULL: [item3]
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_NULL(deleted_item); // Should remain NULL as passed
-    TEST_ASSERT_EQUAL(1, mu_pvec_count(&test_vector));
-    TEST_ASSERT_EQUAL_PTR(&item3, test_vector.item_store[0]);
-
-    deleted_item = NULL;
-    err = mu_pvec_delete(&test_vector, 0, &deleted_item); // Delete item3 at index 0 (last): []
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_EQUAL_PTR(&item3, deleted_item);
-    TEST_ASSERT_EQUAL(0, mu_pvec_count(&test_vector));
+    // count < 2 => no-op
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, mu_pvec_sort(&v, cmp_item));
+    mu_pvec_push(&v, (void *)1);
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, mu_pvec_sort(&v, cmp_item));
 }
 
-/**
- * @brief Test delete function when vector is empty or index is invalid.
- */
-void test_mu_pvec_delete_invalid(void) {
-    TEST_ASSERT_EQUAL(0, mu_pvec_count(&test_vector));
+//----------------------------------------------------------------------------//
+// mu_pvec_reverse: NULL and short
 
-    // Test delete from empty vector
-    void *deleted_item = NULL;
-    mu_pvec_err_t err = mu_pvec_delete(&test_vector, 0, &deleted_item);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_EMPTY, err); // Or MU_STORE_ERR_INDEX depending on implementation
-    TEST_ASSERT_NULL(deleted_item);
-    TEST_ASSERT_EQUAL(0, mu_pvec_count(&test_vector));
+void test_mu_pvec_reverse_param_and_short(void) {
+    void *store[2];
+    mu_pvec_t v;
+    mu_pvec_init(&v, store, 2);
 
-    mu_pvec_push(&test_vector, &item1); // count is 1
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, mu_pvec_reverse(NULL));
 
-    // Test index >= count
-    err = mu_pvec_delete(&test_vector, 1, &deleted_item);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_INDEX, err);
-    TEST_ASSERT_NULL(deleted_item); // Output parameter should not be written
-    TEST_ASSERT_EQUAL(1, mu_pvec_count(&test_vector));
-
-    err = mu_pvec_delete(&test_vector, 10, &deleted_item); // Index far out of bounds
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_INDEX, err);
-    TEST_ASSERT_NULL(deleted_item);
-    TEST_ASSERT_EQUAL(1, mu_pvec_count(&test_vector));
-
-    // Test NULL vector
-    err = mu_pvec_delete(NULL, 0, &deleted_item);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, err);
-    TEST_ASSERT_NULL(deleted_item);
+    // count < 2 => no-op
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, mu_pvec_reverse(&v));
+    mu_pvec_push(&v, (void *)1);
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, mu_pvec_reverse(&v));
 }
 
-/**
- * @brief Test find function using a predicate (find by value).
- */
-void test_mu_pvec_find_by_value(void) {
-    void *items[] = {&item1, &item2, &item3, &item1, &item4}; // [ptr_item1, ptr_item2, ptr_item3, ptr_item1, ptr_item4] (values [10, 20, 30, 10, 5])
-    populate_vector_with_pointers(&test_vector, items, 5);
+//----------------------------------------------------------------------------//
+// mu_pvec_sorted_insert: NULL parameters
 
-    size_t found_index;
-    int search_val = 20; // Search for item with value 20
-    mu_pvec_err_t err = mu_pvec_find(&test_vector, find_test_item_by_value_fn, &search_val, &found_index);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_EQUAL(1, found_index); // Should find the first '20' (item2's pointer) at index 1
-
-    search_val = 10; // Search for item with value 10
-    err = mu_pvec_find(&test_vector, find_test_item_by_value_fn, &search_val, &found_index);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_EQUAL(0, found_index); // Should find the first '10' (item1's pointer) at index 0
-
-    search_val = 5; // Search for item with value 5
-    err = mu_pvec_find(&test_vector, find_test_item_by_value_fn, &search_val, &found_index);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_EQUAL(4, found_index); // Should find '5' (item4's pointer) at index 4
+void test_mu_pvec_sorted_insert_param(void) {
+    void *store[2];
+    mu_pvec_t v;
+    mu_pvec_init(&v, store, 2);
+    TEST_ASSERT_EQUAL(
+        MU_STORE_ERR_PARAM,
+        mu_pvec_sorted_insert(NULL, (void *)1, cmp_item, MU_STORE_INSERT_ANY));
+    // NULL is a valid value to pass to mu_pvec_sorted_insert
+    TEST_ASSERT_EQUAL(
+        MU_STORE_ERR_NONE,
+        mu_pvec_sorted_insert(&v, NULL, cmp_item, MU_STORE_INSERT_ANY));
 }
 
-/**
- * @brief Test find function using a predicate (find by id).
- */
-void test_mu_pvec_find_by_id(void) {
-     void *items[] = {&item1, &item2, &item3, &item1, &item4}; // [ptr_item1, ptr_item2, ptr_item3, ptr_item1, ptr_item4] (ids ['A', 'B', 'C', 'A', 'D'])
-    populate_vector_with_pointers(&test_vector, items, 5);
+//----------------------------------------------------------------------------//
+// and more edge cases for mu_pvec_sorted_insert()
 
-    size_t found_index;
-    char search_id = 'C'; // Search for item with id 'C'
-    mu_pvec_err_t err = mu_pvec_find(&test_vector, find_test_item_by_id_fn, &search_id, &found_index);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_EQUAL(2, found_index); // Should find 'C' (item3's pointer) at index 2
+void test_mu_pvec_sorted_insert_update_first_notfound(void) {
+    void *storage[CAP];
+    mu_pvec_t v;
+    mu_pvec_init(&v, storage, CAP);
 
-    search_id = 'A'; // Search for item with id 'A'
-    err = mu_pvec_find(&test_vector, find_test_item_by_id_fn, &search_id, &found_index);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_EQUAL(0, found_index); // Should find the first 'A' (item1's pointer) at index 0
-}
-
-/**
- * @brief Test find function for item not found by predicate.
- */
-void test_mu_pvec_find_not_found(void) {
-    void *items[] = {&item1, &item2, &item3}; // [ptr_item1, ptr_item2, ptr_item3] (values [10, 20, 30])
-    populate_vector_with_pointers(&test_vector, items, 3);
-
-    size_t found_index;
-    int search_val = 50; // Search for non-existing value
-    mu_pvec_err_t err = mu_pvec_find(&test_vector, find_test_item_by_value_fn, &search_val, &found_index);
+    item_t X = {.value = 42, .id = 1};
+    mu_pvec_err_t err =
+        mu_pvec_sorted_insert(&v, &X, cmp_item, MU_STORE_UPDATE_FIRST);
     TEST_ASSERT_EQUAL(MU_STORE_ERR_NOTFOUND, err);
-    // found_index is undefined in case of error, do not assert its value
+    TEST_ASSERT_EQUAL_size_t(0, mu_pvec_count(&v));
+}
 
-    // Search in an empty vector
-    mu_pvec_clear(&test_vector);
-    err = mu_pvec_find(&test_vector, find_test_item_by_value_fn, &search_val, &found_index);
+void test_mu_pvec_sorted_insert_update_last_notfound(void) {
+    void *storage[CAP];
+    mu_pvec_t v;
+    mu_pvec_init(&v, storage, CAP);
+
+    item_t X = {.value = 42, .id = 2};
+    mu_pvec_err_t err =
+        mu_pvec_sorted_insert(&v, &X, cmp_item, MU_STORE_UPDATE_LAST);
     TEST_ASSERT_EQUAL(MU_STORE_ERR_NOTFOUND, err);
+    TEST_ASSERT_EQUAL_size_t(0, mu_pvec_count(&v));
 }
 
-/**
- * @brief Test find function with invalid parameters.
- */
-void test_mu_pvec_find_invalid_params(void) {
-    void *items[] = {&item1};
-    populate_vector_with_pointers(&test_vector, items, 1);
-    size_t found_index;
-    int search_val = 10;
+void test_mu_pvec_sorted_insert_update_all_notfound(void) {
+    void *storage[CAP];
+    mu_pvec_t v;
+    mu_pvec_init(&v, storage, CAP);
 
-    mu_pvec_err_t err = mu_pvec_find(NULL, find_test_item_by_value_fn, &search_val, &found_index); // NULL vector
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, err);
-
-    err = mu_pvec_find(&test_vector, NULL, &search_val, &found_index); // NULL find_fn
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, err);
-
-    err = mu_pvec_find(&test_vector, find_test_item_by_value_fn, &search_val, NULL); // NULL index pointer
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, err);
-}
-
-/**
- * @brief Test rfind function using a predicate (find by value, last occurrence).
- */
-void test_mu_pvec_rfind_by_value(void) {
-    void *items[] = {&item1, &item2, &item3, &item1, &item4}; // [ptr_item1, ptr_item2, ptr_item3, ptr_item1, ptr_item4] (values [10, 20, 30, 10, 5])
-    populate_vector_with_pointers(&test_vector, items, 5);
-
-    size_t found_index;
-    int search_val = 20; // Search for item with value 20
-    mu_pvec_err_t err = mu_pvec_rfind(&test_vector, find_test_item_by_value_fn, &search_val, &found_index);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_EQUAL(1, found_index); // Only one '20' (item2's pointer), so last is at index 1
-
-    search_val = 10; // Search for item with value 10
-    err = mu_pvec_rfind(&test_vector, find_test_item_by_value_fn, &search_val, &found_index);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_EQUAL(3, found_index); // Should find the last '10' (item1's pointer) at index 3
-
-    search_val = 5; // Search for item with value 5
-    err = mu_pvec_rfind(&test_vector, find_test_item_by_value_fn, &search_val, &found_index);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_EQUAL(4, found_index); // Should find '5' (item4's pointer) at index 4 (last element)
-}
-
-/**
- * @brief Test rfind function using a predicate (find by id, last occurrence).
- */
-void test_mu_pvec_rfind_by_id(void) {
-     void *items[] = {&item1, &item2, &item3, &item1, &item4}; // [ptr_item1, ptr_item2, ptr_item3, ptr_item1, ptr_item4] (ids ['A', 'B', 'C', 'A', 'D'])
-    populate_vector_with_pointers(&test_vector, items, 5);
-
-    size_t found_index;
-    char search_id = 'C'; // Search for item with id 'C'
-    mu_pvec_err_t err = mu_pvec_rfind(&test_vector, find_test_item_by_id_fn, &search_id, &found_index);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_EQUAL(2, found_index); // Should find 'C' (item3's pointer) at index 2
-
-    search_id = 'A'; // Search for item with id 'A'
-    err = mu_pvec_rfind(&test_vector, find_test_item_by_id_fn, &search_id, &found_index);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_EQUAL(3, found_index); // Should find the last 'A' (item1's pointer) at index 3
-}
-
-
-/**
- * @brief Test rfind function for item not found by predicate.
- */
-void test_mu_pvec_rfind_not_found(void) {
-    void *items[] = {&item1, &item2, &item3}; // [ptr_item1, ptr_item2, ptr_item3] (values [10, 20, 30])
-    populate_vector_with_pointers(&test_vector, items, 3);
-
-    size_t found_index;
-    int search_val = 50; // Search for non-existing value
-    mu_pvec_err_t err = mu_pvec_rfind(&test_vector, find_test_item_by_value_fn, &search_val, &found_index);
+    item_t X = {.value = 42, .id = 3};
+    mu_pvec_err_t err =
+        mu_pvec_sorted_insert(&v, &X, cmp_item, MU_STORE_UPDATE_ALL);
     TEST_ASSERT_EQUAL(MU_STORE_ERR_NOTFOUND, err);
-    // found_index is undefined in case of error, do not assert its value
+    TEST_ASSERT_EQUAL_size_t(0, mu_pvec_count(&v));
+}
 
-    // Search in an empty vector
-    mu_pvec_clear(&test_vector);
-    err = mu_pvec_rfind(&test_vector, find_test_item_by_value_fn, &search_val, &found_index);
+void test_mu_pvec_sorted_insert_upsert_first_no_match(void) {
+    void *storage[CAP];
+    mu_pvec_t v;
+    mu_pvec_init(&v, storage, CAP);
+
+    item_t X = {.value = 7, .id = 70};
+    mu_pvec_err_t err =
+        mu_pvec_sorted_insert(&v, &X, cmp_item, MU_STORE_UPSERT_FIRST);
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
+    TEST_ASSERT_EQUAL_size_t(1, mu_pvec_count(&v));
+
+    item_t *out;
+    mu_pvec_ref(&v, 0, (void **)&out);
+    TEST_ASSERT_EQUAL_INT(70, out->id);
+}
+
+void test_mu_pvec_sorted_insert_upsert_last_match(void) {
+    void *storage[CAP];
+    mu_pvec_t v;
+    mu_pvec_init(&v, storage, CAP);
+
+    item_t A = {.value = 5, .id = 50};
+    mu_pvec_sorted_insert(&v, &A, cmp_item, MU_STORE_INSERT_ANY);
+
+    item_t B = {.value = 5, .id = 51};
+    mu_pvec_err_t err =
+        mu_pvec_sorted_insert(&v, &B, cmp_item, MU_STORE_UPSERT_LAST);
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
+    TEST_ASSERT_EQUAL_size_t(1, mu_pvec_count(&v));
+
+    item_t *out;
+    mu_pvec_ref(&v, 0, (void **)&out);
+    TEST_ASSERT_EQUAL_INT(51, out->id);
+}
+
+void test_mu_pvec_sorted_insert_duplicate_notfound(void) {
+    void *storage[CAP];
+    mu_pvec_t v;
+    mu_pvec_init(&v, storage, CAP);
+
+    item_t X = {.value = 9, .id = 90};
+    mu_pvec_err_t err =
+        mu_pvec_sorted_insert(&v, &X, cmp_item, MU_STORE_INSERT_DUPLICATE);
     TEST_ASSERT_EQUAL(MU_STORE_ERR_NOTFOUND, err);
+    TEST_ASSERT_EQUAL_size_t(0, mu_pvec_count(&v));
 }
 
-/**
- * @brief Test rfind function with invalid parameters.
- */
-void test_mu_pvec_rfind_invalid_params(void) {
-    void *items[] = {&item1};
-    populate_vector_with_pointers(&test_vector, items, 1);
-    size_t found_index;
-    int search_val = 10;
+void test_mu_pvec_sorted_insert_first_no_match(void) {
+    void *storage[CAP];
+    mu_pvec_t v;
+    mu_pvec_init(&v, storage, CAP);
 
-    mu_pvec_err_t err = mu_pvec_rfind(NULL, find_test_item_by_value_fn, &search_val, &found_index); // NULL vector
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, err);
+    item_t X = {.value = 3, .id = 30};
+    mu_pvec_err_t err =
+        mu_pvec_sorted_insert(&v, &X, cmp_item, MU_STORE_INSERT_FIRST);
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
+    TEST_ASSERT_EQUAL_size_t(1, mu_pvec_count(&v));
 
-    err = mu_pvec_rfind(&test_vector, NULL, &search_val, &found_index); // NULL find_fn
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, err);
-
-    err = mu_pvec_rfind(&test_vector, find_test_item_by_value_fn, &search_val, NULL); // NULL index pointer
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, err);
+    item_t *out;
+    mu_pvec_ref(&v, 0, (void **)&out);
+    TEST_ASSERT_EQUAL_INT(30, out->id);
 }
 
-/**
- * @brief Test sort function (uses the real mu_store_psort).
- */
-void test_mu_pvec_sort(void) {
-    void *items[] = {&item3, &item1, &item2, &item4, &item5}; // values [30, 10, 20, 5, 20]
-    populate_vector_with_pointers(&test_vector, items, 5);
-    TEST_ASSERT_FALSE(is_pointers_sorted_by_value(test_vector.item_store, test_vector.count)); // Verify unsorted
+void test_mu_pvec_sorted_insert_last_no_match(void) {
+    void *storage[CAP];
+    mu_pvec_t v;
+    mu_pvec_init(&v, storage, CAP);
 
-    // Call the real mu_pvec_sort, which calls the real mu_store_psort
-    mu_pvec_err_t err = mu_pvec_sort(&test_vector, compare_pointers_by_value);
+    item_t X = {.value = 4, .id = 40};
+    mu_pvec_err_t err =
+        mu_pvec_sorted_insert(&v, &X, cmp_item, MU_STORE_INSERT_LAST);
     TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
+    TEST_ASSERT_EQUAL_size_t(1, mu_pvec_count(&v));
 
-    // Verify that the vector's item_store is now sorted by value
-    TEST_ASSERT_TRUE(is_pointers_sorted_by_value(test_vector.item_store, test_vector.count));
-    TEST_ASSERT_EQUAL(5, ((test_item_t*)test_vector.item_store[0])->value);
-    TEST_ASSERT_EQUAL(10, ((test_item_t*)test_vector.item_store[1])->value);
-    TEST_ASSERT_EQUAL(20, ((test_item_t*)test_vector.item_store[2])->value);
-    TEST_ASSERT_EQUAL(20, ((test_item_t*)test_vector.item_store[3])->value);
-    TEST_ASSERT_EQUAL(30, ((test_item_t*)test_vector.item_store[4])->value);
-
-
-    // Test sorting an empty vector (should do nothing, return success)
-    mu_pvec_clear(&test_vector);
-    err = mu_pvec_sort(&test_vector, compare_pointers_by_value);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_TRUE(is_pointers_sorted_by_value(test_vector.item_store, test_vector.count)); // Still sorted (vacuously true)
-
-    // Test sorting a single-element vector (should do nothing, return success)
-    mu_pvec_push(&test_vector, &item1);
-    err = mu_pvec_sort(&test_vector, compare_pointers_by_value);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_TRUE(is_pointers_sorted_by_value(test_vector.item_store, test_vector.count)); // Still sorted
-    TEST_ASSERT_EQUAL_PTR(&item1, test_vector.item_store[0]); // Should be unchanged
+    item_t *out;
+    mu_pvec_ref(&v, 0, (void **)&out);
+    TEST_ASSERT_EQUAL_INT(40, out->id);
 }
 
-/**
- * @brief Test sort function with invalid parameters.
- */
-void test_mu_pvec_sort_invalid_params(void) {
-    void *items[] = {&item1};
-    populate_vector_with_pointers(&test_vector, items, 1);
-
-    mu_pvec_err_t err = mu_pvec_sort(NULL, compare_pointers_by_value); // NULL vector
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, err);
-
-    err = mu_pvec_sort(&test_vector, NULL); // NULL compare_fn
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, err);
-}
-
-
-/**
- * @brief Test reverse function.
- */
-void test_mu_pvec_reverse(void) {
-    void *items[] = {&item1, &item2, &item3, &item4}; // [ptr_item1, ptr_item2, ptr_item3, ptr_item4]
-    populate_vector_with_pointers(&test_vector, items, 4);
-
-    mu_pvec_err_t err = mu_pvec_reverse(&test_vector);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_EQUAL(4, mu_pvec_count(&test_vector));
-    // Verify order of pointers is reversed
-    TEST_ASSERT_EQUAL_PTR(&item4, test_vector.item_store[0]);
-    TEST_ASSERT_EQUAL_PTR(&item3, test_vector.item_store[1]);
-    TEST_ASSERT_EQUAL_PTR(&item2, test_vector.item_store[2]);
-    TEST_ASSERT_EQUAL_PTR(&item1, test_vector.item_store[3]);
-
-    // Test reversing an empty vector
-    mu_pvec_clear(&test_vector);
-    err = mu_pvec_reverse(&test_vector);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_EQUAL(0, mu_pvec_count(&test_vector));
-
-    // Test reversing a single-element vector
-    mu_pvec_push(&test_vector, &item1);
-    err = mu_pvec_reverse(&test_vector);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_EQUAL(1, mu_pvec_count(&test_vector));
-    TEST_ASSERT_EQUAL_PTR(&item1, test_vector.item_store[0]); // Should remain the same
-
-    // Test with NULL vector
-    err = mu_pvec_reverse(NULL);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, err);
-}
-
-//------------------------------------------------------------------------------
-// Sorted Insertion / Update / Upsert Tests (require vector to be sorted initially)
-// These tests primarily verify the logic of finding the insertion/update point
-// and applying the policy, assuming the vector is already sorted.
-//------------------------------------------------------------------------------
-
-/**
- * @brief Test sorted_insert with MU_STORE_INSERT_ANY policy.
- */
-void test_mu_pvec_sorted_insert_ANY(void) {
-    // Initial sorted data (by value)
-    void *items[] = {&item4, &item1, &item2, &item3}; // Values [5, 10, 20, 30]
-    // Need to manually sort the pointers here for the test setup
-    // Using the real mu_store_psort for test setup
-    mu_store_psort((void**)items, 4, compare_pointers_by_value); // Sorts the 'items' array of pointers
-    populate_vector_with_pointers(&test_vector, items, 4); // Vector: [ptr_item4, ptr_item1, ptr_item2, ptr_item3] (values [5, 10, 20, 30])
-    TEST_ASSERT_TRUE(is_pointers_sorted_by_value(test_vector.item_store, test_vector.count)); // Verify setup is sorted
-
-    test_item_t new_item_data = {.value = 15, .id = 'Z'};
-    void *new_item = &new_item_data;
-    mu_pvec_err_t err = mu_pvec_sorted_insert(&test_vector, new_item, compare_pointers_by_value, MU_STORE_INSERT_ANY);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_EQUAL(5, mu_pvec_count(&test_vector));
-    // Expected order (by value): [5, 10, 15, 20, 30]
-    TEST_ASSERT_EQUAL(5, ((test_item_t*)test_vector.item_store[0])->value);
-    TEST_ASSERT_EQUAL(10, ((test_item_t*)test_vector.item_store[1])->value);
-    TEST_ASSERT_EQUAL_PTR(new_item, test_vector.item_store[2]); // Inserted here
-    TEST_ASSERT_EQUAL(20, ((test_item_t*)test_vector.item_store[3])->value);
-    TEST_ASSERT_EQUAL(30, ((test_item_t*)test_vector.item_store[4])->value);
-    TEST_ASSERT_TRUE(is_pointers_sorted_by_value(test_vector.item_store, test_vector.count)); // Verify resulting vector is still sorted
-
-    // Insert a duplicate value
-    test_item_t dup_item_data = {.value = 20, .id = 'F'};
-    void *dup_item = &dup_item_data;
-    err = mu_pvec_sorted_insert(&test_vector, dup_item, compare_pointers_by_value, MU_STORE_INSERT_ANY);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_EQUAL(6, mu_pvec_count(&test_vector));
-    // Expected order (by value): [5, 10, 15, 20 (original), 20 (inserted), 30] - inserted after existing 20
-    TEST_ASSERT_EQUAL(15, ((test_item_t*)test_vector.item_store[2])->value);
-    TEST_ASSERT_EQUAL(20, ((test_item_t*)test_vector.item_store[3])->value); // Original 20
-    TEST_ASSERT_EQUAL_PTR(dup_item, test_vector.item_store[4]);            // Inserted here (upper bound)
-    TEST_ASSERT_EQUAL(30, ((test_item_t*)test_vector.item_store[5])->value);
-    TEST_ASSERT_TRUE(is_pointers_sorted_by_value(test_vector.item_store, test_vector.count)); // Verify resulting vector is still sorted
-}
-
-/**
- * @brief Test sorted_insert with MU_STORE_INSERT_FIRST policy.
- */
-void test_mu_pvec_sorted_insert_FIRST(void) {
-    // Initial sorted data (by value) with duplicates
-    void *items[] = {&item1, &item2, &item5, &item3}; // Values [10, 20, 20, 30]
-    mu_store_psort((void**)items, 4, compare_pointers_by_value); // Sorts the 'items' array of pointers
-    populate_vector_with_pointers(&test_vector, items, 4); // Vector: [ptr_item1, ptr_item2, ptr_item5, ptr_item3] (values [10, 20, 20, 30])
-     TEST_ASSERT_TRUE(is_pointers_sorted_by_value(test_vector.item_store, test_vector.count)); // Verify setup is sorted
-
-
-    test_item_t new_item_data = {.value = 20, .id = 'F'};
-    void *new_item = &new_item_data;
-    mu_pvec_err_t err = mu_pvec_sorted_insert(&test_vector, new_item, compare_pointers_by_value, MU_STORE_INSERT_FIRST);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_EQUAL(5, mu_pvec_count(&test_vector));
-    // Expected order (by value): [10, 20 (inserted), 20 (original B), 20 (original E), 30] - inserted before existing 20s
-    TEST_ASSERT_EQUAL(10, ((test_item_t*)test_vector.item_store[0])->value);
-    TEST_ASSERT_EQUAL_PTR(new_item, test_vector.item_store[1]); // Inserted here
-    TEST_ASSERT_EQUAL(20, ((test_item_t*)test_vector.item_store[2])->value); // Original 20s follow
-    TEST_ASSERT_EQUAL(20, ((test_item_t*)test_vector.item_store[3])->value);
-    TEST_ASSERT_EQUAL(30, ((test_item_t*)test_vector.item_store[4])->value);
-    TEST_ASSERT_TRUE(is_pointers_sorted_by_value(test_vector.item_store, test_vector.count)); // Verify resulting vector is still sorted
-
-
-    // Insert a value that is smaller than all existing (should insert at index 0)
-    test_item_t smallest_item_data = {.value = 1, .id = 'Z'};
-    void *smallest_item = &smallest_item_data;
-    err = mu_pvec_sorted_insert(&test_vector, smallest_item, compare_pointers_by_value, MU_STORE_INSERT_FIRST);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_EQUAL(6, mu_pvec_count(&test_vector));
-    // Expected order (by value): [1, 10, 20, 20, 20, 30]
-    TEST_ASSERT_EQUAL_PTR(smallest_item, test_vector.item_store[0]); // Inserted at the beginning
-    TEST_ASSERT_EQUAL(10, ((test_item_t*)test_vector.item_store[1])->value);
-    TEST_ASSERT_TRUE(is_pointers_sorted_by_value(test_vector.item_store, test_vector.count)); // Verify resulting vector is still sorted
-}
-
-/**
- * @brief Test sorted_insert with MU_STORE_INSERT_LAST policy.
- */
-void test_mu_pvec_sorted_insert_LAST(void) {
-    // Initial sorted data (by value) with duplicates
-    void *items[] = {&item1, &item2, &item5, &item3}; // Values [10, 20, 20, 30]
-    mu_store_psort((void**)items, 4, compare_pointers_by_value); // Sorts the 'items' array of pointers
-    populate_vector_with_pointers(&test_vector, items, 4); // Vector: [ptr_item1, ptr_item2, ptr_item5, ptr_item3] (values [10, 20, 20, 30])
-     TEST_ASSERT_TRUE(is_pointers_sorted_by_value(test_vector.item_store, test_vector.count)); // Verify setup is sorted
-
-    test_item_t new_item_data = {.value = 20, .id = 'F'};
-    void *new_item = &new_item_data;
-    mu_pvec_err_t err = mu_pvec_sorted_insert(&test_vector, new_item, compare_pointers_by_value, MU_STORE_INSERT_LAST);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_EQUAL(5, mu_pvec_count(&test_vector));
-    // Expected order (by value): [10, 20 (original B), 20 (original E), 20 (inserted), 30] - inserted after existing 20s
-    TEST_ASSERT_EQUAL(10, ((test_item_t*)test_vector.item_store[0])->value);
-    TEST_ASSERT_EQUAL(20, ((test_item_t*)test_vector.item_store[1])->value); // Original 20s
-    TEST_ASSERT_EQUAL(20, ((test_item_t*)test_vector.item_store[2])->value);
-    TEST_ASSERT_EQUAL_PTR(new_item, test_vector.item_store[3]); // Inserted here (upper bound)
-    TEST_ASSERT_EQUAL(30, ((test_item_t*)test_vector.item_store[4])->value);
-    TEST_ASSERT_TRUE(is_pointers_sorted_by_value(test_vector.item_store, test_vector.count)); // Verify resulting vector is still sorted
-
-
-    // Insert a value that is larger than all existing (should insert at the end)
-    test_item_t largest_item_data = {.value = 100, .id = 'Z'};
-    void *largest_item = &largest_item_data;
-    err = mu_pvec_sorted_insert(&test_vector, largest_item, compare_pointers_by_value, MU_STORE_INSERT_LAST);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_EQUAL(6, mu_pvec_count(&test_vector));
-    // Expected order (by value): [10, 20, 20, 20, 30, 100]
-    TEST_ASSERT_EQUAL(30, ((test_item_t*)test_vector.item_store[4])->value);
-    TEST_ASSERT_EQUAL_PTR(largest_item, test_vector.item_store[5]); // Inserted at the end
-    TEST_ASSERT_TRUE(is_pointers_sorted_by_value(test_vector.item_store, test_vector.count)); // Verify resulting vector is still sorted
-}
-
-
-/**
- * @brief Test sorted_insert with MU_STORE_UPDATE_FIRST policy.
- */
-void test_mu_pvec_sorted_insert_UPDATE_FIRST(void) {
-     // Initial sorted data (by value) with duplicates
-    void *items[] = {&item1, &item2, &item5, &item3}; // Values [10, 20, 20, 30]
-    mu_store_psort((void**)items, 4, compare_pointers_by_value); // Sorts the 'items' array of pointers
-    populate_vector_with_pointers(&test_vector, items, 4); // Vector: [ptr_item1, ptr_item2, ptr_item5, ptr_item3] (values [10, 20, 20, 30])
-     TEST_ASSERT_TRUE(is_pointers_sorted_by_value(test_vector.item_store, test_vector.count)); // Verify setup is sorted
-
-    // Before update, identify the items at index 1 and 2
-    // void *ptr_at_1_before = test_vector.item_store[1]; // Should be item2 (value 20, id 'B')
-    void *ptr_at_2_before = test_vector.item_store[2]; // Should be item5 (value 20, id 'E')
-
-    test_item_t new_item_data = {.value = 20, .id = 'F'}; // New data for the update
-    void *new_item = &new_item_data;
-    mu_pvec_err_t err = mu_pvec_sorted_insert(&test_vector, new_item, compare_pointers_by_value, MU_STORE_UPDATE_FIRST);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_EQUAL(4, mu_pvec_count(&test_vector)); // Count should not change (update)
-    // Expected state (by value): [10, 20 (updated F), 20 (original E), 30] - first '20' is updated
-    TEST_ASSERT_EQUAL(10, ((test_item_t*)test_vector.item_store[0])->value);
-    TEST_ASSERT_EQUAL_PTR(new_item, test_vector.item_store[1]); // Pointer at index 1 is updated
-    TEST_ASSERT_EQUAL_PTR(ptr_at_2_before, test_vector.item_store[2]); // Pointer at index 2 is unchanged
-    TEST_ASSERT_EQUAL(30, ((test_item_t*)test_vector.item_store[3])->value);
-    TEST_ASSERT_TRUE(is_pointers_sorted_by_value(test_vector.item_store, test_vector.count)); // Verify resulting vector is still sorted
-
-
-    // Test update a non-existing value
-    test_item_t non_exist_item_data = {.value = 99, .id = 'X'};
-    void *non_exist_item = &non_exist_item_data;
-    err = mu_pvec_sorted_insert(&test_vector, non_exist_item, compare_pointers_by_value, MU_STORE_UPDATE_FIRST);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NOTFOUND, err);
-    TEST_ASSERT_EQUAL(4, mu_pvec_count(&test_vector)); // Count should not change
-    // Vector state should be unchanged
-    TEST_ASSERT_EQUAL(10, ((test_item_t*)test_vector.item_store[0])->value);
-    TEST_ASSERT_EQUAL_PTR(new_item, test_vector.item_store[1]);
-    TEST_ASSERT_EQUAL_PTR(ptr_at_2_before, test_vector.item_store[2]);
-    TEST_ASSERT_EQUAL(30, ((test_item_t*)test_vector.item_store[3])->value);
-}
-
-/**
- * @brief Test sorted_insert with MU_STORE_UPDATE_LAST policy.
- */
-void test_mu_pvec_sorted_insert_UPDATE_LAST(void) {
-    // Initial sorted data (by value) with duplicates
-    void *items[] = {&item1, &item2, &item5, &item3}; // Values [10, 20, 20, 30]
-    mu_store_psort((void**)items, 4, compare_pointers_by_value); // Sorts the 'items' array of pointers
-    populate_vector_with_pointers(&test_vector, items, 4); // Vector: [ptr_item1, ptr_item2, ptr_item5, ptr_item3] (values [10, 20, 20, 30])
-     TEST_ASSERT_TRUE(is_pointers_sorted_by_value(test_vector.item_store, test_vector.count)); // Verify setup is sorted
-
-    // Before update, identify the items at index 1 and 2
-    void *ptr_at_1_before = test_vector.item_store[1]; // Should be item2 (value 20, id 'B')
-    // void *ptr_at_2_before = test_vector.item_store[2]; // Should be item5 (value 20, id 'E')
-
-    test_item_t new_item_data = {.value = 20, .id = 'F'}; // New data for the update
-    void *new_item = &new_item_data;
-    mu_pvec_err_t err = mu_pvec_sorted_insert(&test_vector, new_item, compare_pointers_by_value, MU_STORE_UPDATE_LAST);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_EQUAL(4, mu_pvec_count(&test_vector)); // Count should not change (update)
-    // Expected state (by value): [10, 20 (original B), 20 (updated F), 30] - last '20' is updated
-    TEST_ASSERT_EQUAL(10, ((test_item_t*)test_vector.item_store[0])->value);
-    TEST_ASSERT_EQUAL_PTR(ptr_at_1_before, test_vector.item_store[1]); // Pointer at index 1 is unchanged
-    TEST_ASSERT_EQUAL_PTR(new_item, test_vector.item_store[2]); // Pointer at index 2 is updated
-    TEST_ASSERT_EQUAL(30, ((test_item_t*)test_vector.item_store[3])->value);
-     TEST_ASSERT_TRUE(is_pointers_sorted_by_value(test_vector.item_store, test_vector.count)); // Verify resulting vector is still sorted
-
-    // Test update a non-existing value
-    test_item_t non_exist_item_data = {.value = 99, .id = 'X'};
-    void *non_exist_item = &non_exist_item_data;
-    err = mu_pvec_sorted_insert(&test_vector, non_exist_item, compare_pointers_by_value, MU_STORE_UPDATE_LAST);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NOTFOUND, err);
-    TEST_ASSERT_EQUAL(4, mu_pvec_count(&test_vector)); // Count should not change
-    // Vector state should be unchanged
-     TEST_ASSERT_EQUAL(10, ((test_item_t*)test_vector.item_store[0])->value);
-    TEST_ASSERT_EQUAL_PTR(ptr_at_1_before, test_vector.item_store[1]);
-    TEST_ASSERT_EQUAL_PTR(new_item, test_vector.item_store[2]);
-    TEST_ASSERT_EQUAL(30, ((test_item_t*)test_vector.item_store[3])->value);
-}
-
-/**
- * @brief Test sorted_insert with MU_STORE_UPDATE_ALL policy.
- */
-void test_mu_pvec_sorted_insert_UPDATE_ALL(void) {
-     // Initial sorted data (by value) with duplicates
-    void *items[] = {&item1, &item2, &item5, &item3}; // Values [10, 20, 20, 30]
-    mu_store_psort((void**)items, 4, compare_pointers_by_value); // Sorts the 'items' array of pointers
-    populate_vector_with_pointers(&test_vector, items, 4); // Vector: [ptr_item1, ptr_item2, ptr_item5, ptr_item3] (values [10, 20, 20, 30])
-     TEST_ASSERT_TRUE(is_pointers_sorted_by_value(test_vector.item_store, test_vector.count)); // Verify setup is sorted
-
-    test_item_t new_item_data = {.value = 20, .id = 'F'}; // New data for the update
-    void *new_item = &new_item_data;
-    mu_pvec_err_t err = mu_pvec_sorted_insert(&test_vector, new_item, compare_pointers_by_value, MU_STORE_UPDATE_ALL);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_EQUAL(4, mu_pvec_count(&test_vector)); // Count should not change (update)
-    // Expected state (by value): [10, 20 (updated F), 20 (updated F), 30] - all '20's are updated
-    TEST_ASSERT_EQUAL(10, ((test_item_t*)test_vector.item_store[0])->value);
-    TEST_ASSERT_EQUAL_PTR(new_item, test_vector.item_store[1]); // Pointer at index 1 is updated
-    TEST_ASSERT_EQUAL_PTR(new_item, test_vector.item_store[2]); // Pointer at index 2 is updated
-    TEST_ASSERT_EQUAL(30, ((test_item_t*)test_vector.item_store[3])->value);
-     TEST_ASSERT_TRUE(is_pointers_sorted_by_value(test_vector.item_store, test_vector.count)); // Verify resulting vector is still sorted
-
-    // Test update a non-existing value
-    test_item_t non_exist_item_data = {.value = 99, .id = 'X'};
-    void *non_exist_item = &non_exist_item_data;
-    err = mu_pvec_sorted_insert(&test_vector, non_exist_item, compare_pointers_by_value, MU_STORE_UPDATE_ALL);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NOTFOUND, err);
-    TEST_ASSERT_EQUAL(4, mu_pvec_count(&test_vector)); // Count should not change
-    // Vector state should be unchanged
-     TEST_ASSERT_EQUAL(10, ((test_item_t*)test_vector.item_store[0])->value);
-    TEST_ASSERT_EQUAL_PTR(new_item, test_vector.item_store[1]);
-    TEST_ASSERT_EQUAL_PTR(new_item, test_vector.item_store[2]);
-    TEST_ASSERT_EQUAL(30, ((test_item_t*)test_vector.item_store[3])->value);
-}
-
-
-/**
- * @brief Test sorted_insert with MU_STORE_UPSERT_FIRST policy.
- */
-void test_mu_pvec_sorted_insert_UPSERT_FIRST(void) {
-     // Initial sorted data (by value) with duplicates
-    void *items[] = {&item1, &item2, &item5, &item3}; // Values [10, 20, 20, 30]
-    mu_store_psort((void**)items, 4, compare_pointers_by_value); // Sorts the 'items' array of pointers
-    populate_vector_with_pointers(&test_vector, items, 4); // Vector: [ptr_item1, ptr_item2, ptr_item5, ptr_item3] (values [10, 20, 20, 30])
-     TEST_ASSERT_TRUE(is_pointers_sorted_by_value(test_vector.item_store, test_vector.count)); // Verify setup is sorted
-
-    // Upsert an existing value (should update the first match)
-    // void *ptr_at_1_before = test_vector.item_store[1]; // Should be item2 (value 20, id 'B')
-    void *ptr_at_2_before = test_vector.item_store[2]; // Should be item5 (value 20, id 'E')
-
-    test_item_t new_item_exist_data = {.value = 20, .id = 'F'};
-    void *new_item_exist = &new_item_exist_data;
-    mu_pvec_err_t err = mu_pvec_sorted_insert(&test_vector, new_item_exist, compare_pointers_by_value, MU_STORE_UPSERT_FIRST);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_EQUAL(4, mu_pvec_count(&test_vector)); // Count should not change (update)
-    // Expected state (by value): [10, 20 (updated F), 20 (original E), 30] - first '20' is updated
-    TEST_ASSERT_EQUAL(10, ((test_item_t*)test_vector.item_store[0])->value);
-    TEST_ASSERT_EQUAL_PTR(new_item_exist, test_vector.item_store[1]); // Pointer at index 1 is updated
-    TEST_ASSERT_EQUAL_PTR(ptr_at_2_before, test_vector.item_store[2]); // Pointer at index 2 is unchanged
-    TEST_ASSERT_EQUAL(30, ((test_item_t*)test_vector.item_store[3])->value);
-     TEST_ASSERT_TRUE(is_pointers_sorted_by_value(test_vector.item_store, test_vector.count)); // Verify resulting vector is still sorted
-
-
-    // Upsert a non-existing value (should insert at the first position for that value)
-    test_item_t new_item_new_data = {.value = 15, .id = 'Z'};
-    void *new_item_new = &new_item_new_data;
-    err = mu_pvec_sorted_insert(&test_vector, new_item_new, compare_pointers_by_value, MU_STORE_UPSERT_FIRST);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_EQUAL(5, mu_pvec_count(&test_vector)); // Count should increase (insert)
-    // Expected state (by value): [10, 15, 20 (updated F), 20 (original E), 30] - 15 is inserted before the 20s
-    TEST_ASSERT_EQUAL(10, ((test_item_t*)test_vector.item_store[0])->value);
-    TEST_ASSERT_EQUAL_PTR(new_item_new, test_vector.item_store[1]); // Inserted item
-    TEST_ASSERT_EQUAL(20, ((test_item_t*)test_vector.item_store[2])->value); // First 20
-     TEST_ASSERT_TRUE(is_pointers_sorted_by_value(test_vector.item_store, test_vector.count)); // Verify resulting vector is still sorted
-}
-
-/**
- * @brief Test sorted_insert with MU_STORE_UPSERT_LAST policy.
- */
-void test_mu_pvec_sorted_insert_UPSERT_LAST(void) {
-     // Initial sorted data (by value) with duplicates
-    void *items[] = {&item1, &item2, &item5, &item3}; // Values [10, 20, 20, 30]
-    mu_store_psort((void**)items, 4, compare_pointers_by_value); // Sorts the 'items' array of pointers
-    populate_vector_with_pointers(&test_vector, items, 4); // Vector: [ptr_item1, ptr_item2, ptr_item5, ptr_item3] (values [10, 20, 20, 30])
-     TEST_ASSERT_TRUE(is_pointers_sorted_by_value(test_vector.item_store, test_vector.count)); // Verify setup is sorted
-
-    // Upsert an existing value (should update the last match)
-    void *ptr_at_1_before = test_vector.item_store[1]; // Should be item2 (value 20, id 'B')
-    // void *ptr_at_2_before = test_vector.item_store[2]; // Should be item5 (value 20, id 'E')
-
-    test_item_t new_item_exist_data = {.value = 20, .id = 'F'};
-    void *new_item_exist = &new_item_exist_data;
-    mu_pvec_err_t err = mu_pvec_sorted_insert(&test_vector, new_item_exist, compare_pointers_by_value, MU_STORE_UPSERT_LAST);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_EQUAL(4, mu_pvec_count(&test_vector)); // Count should not change (update)
-    // Expected state (by value): [10, 20 (original B), 20 (updated F), 30] - last '20' is updated
-    TEST_ASSERT_EQUAL(10, ((test_item_t*)test_vector.item_store[0])->value);
-    TEST_ASSERT_EQUAL_PTR(ptr_at_1_before, test_vector.item_store[1]); // Pointer at index 1 is unchanged
-    TEST_ASSERT_EQUAL_PTR(new_item_exist, test_vector.item_store[2]); // Pointer at index 2 is updated
-    TEST_ASSERT_EQUAL(30, ((test_item_t*)test_vector.item_store[3])->value);
-     TEST_ASSERT_TRUE(is_pointers_sorted_by_value(test_vector.item_store, test_vector.count)); // Verify resulting vector is still sorted
-
-
-    // Upsert a non-existing value (should insert at the last position for that value)
-    test_item_t new_item_new_data = {.value = 15, .id = 'Z'};
-    void *new_item_new = &new_item_new_data;
-    err = mu_pvec_sorted_insert(&test_vector, new_item_new, compare_pointers_by_value, MU_STORE_UPSERT_LAST);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_EQUAL(5, mu_pvec_count(&test_vector)); // Count should increase (insert)
-    // Expected state (by value): [10, 15, 20 (original B), 20 (updated F), 30] - 15 is inserted after 10
-    TEST_ASSERT_EQUAL(10, ((test_item_t*)test_vector.item_store[0])->value);
-    TEST_ASSERT_EQUAL_PTR(new_item_new, test_vector.item_store[1]); // Inserted item
-    TEST_ASSERT_EQUAL(20, ((test_item_t*)test_vector.item_store[2])->value); // First 20
-     TEST_ASSERT_TRUE(is_pointers_sorted_by_value(test_vector.item_store, test_vector.count)); // Verify resulting vector is still sorted
-}
-
-
-/**
- * @brief Test sorted_insert with MU_STORE_INSERT_UNIQUE policy.
- */
-void test_mu_pvec_sorted_insert_UNIQUE(void) {
-    // Initial sorted data (by value)
-    void *items[] = {&item1, &item2, &item3}; // Values [10, 20, 30]
-    mu_store_psort((void**)items, 3, compare_pointers_by_value);
-    populate_vector_with_pointers(&test_vector, items, 3); // Vector: [ptr_item1, ptr_item2, ptr_item3] (values [10, 20, 30])
-    TEST_ASSERT_TRUE(is_pointers_sorted_by_value(test_vector.item_store, test_vector.count)); // Verify setup is sorted
-
-    // Insert a non-existing value (should succeed)
-    test_item_t new_item_data = {.value = 15, .id = 'Z'};
-    void *new_item = &new_item_data;
-    mu_pvec_err_t err = mu_pvec_sorted_insert(&test_vector, new_item, compare_pointers_by_value, MU_STORE_INSERT_UNIQUE);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_EQUAL(4, mu_pvec_count(&test_vector)); // Count should increase
-    // Expected state (by value): [10, 15, 20, 30]
-    TEST_ASSERT_EQUAL(10, ((test_item_t*)test_vector.item_store[0])->value);
-    TEST_ASSERT_EQUAL_PTR(new_item, test_vector.item_store[1]);
-    TEST_ASSERT_EQUAL(20, ((test_item_t*)test_vector.item_store[2])->value);
-    TEST_ASSERT_EQUAL(30, ((test_item_t*)test_vector.item_store[3])->value);
-    TEST_ASSERT_TRUE(is_pointers_sorted_by_value(test_vector.item_store, test_vector.count)); // Verify resulting vector is still sorted
-
-
-    // Attempt to insert an existing value (should fail)
-    test_item_t exist_item_data = {.value = 20, .id = 'X'};
-    void *exist_item = &exist_item_data;
-    err = mu_pvec_sorted_insert(&test_vector, exist_item, compare_pointers_by_value, MU_STORE_INSERT_UNIQUE);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_EXISTS, err);
-    TEST_ASSERT_EQUAL(4, mu_pvec_count(&test_vector)); // Count should not change
-    // Vector state should be unchanged: [10, 15, 20 (original), 30]
-     TEST_ASSERT_EQUAL(10, ((test_item_t*)test_vector.item_store[0])->value);
-    TEST_ASSERT_EQUAL(15, ((test_item_t*)test_vector.item_store[1])->value);
-    TEST_ASSERT_EQUAL(20, ((test_item_t*)test_vector.item_store[2])->value); // Original 20
-    TEST_ASSERT_EQUAL(30, ((test_item_t*)test_vector.item_store[3])->value);
-}
-
-/**
- * @brief Test sorted_insert with MU_STORE_INSERT_DUPLICATE policy.
- */
-void test_mu_pvec_sorted_insert_DUPLICATE(void) {
-    // Initial sorted data (by value)
-    void *items[] = {&item1, &item2, &item3}; // Values [10, 20, 30]
-    mu_store_psort((void**)items, 3, compare_pointers_by_value);
-    populate_vector_with_pointers(&test_vector, items, 3); // Vector: [ptr_item1, ptr_item2, ptr_item3] (values [10, 20, 30])
-     TEST_ASSERT_TRUE(is_pointers_sorted_by_value(test_vector.item_store, test_vector.count)); // Verify setup is sorted
-
-
-    // Attempt to insert a non-existing value (should fail)
-    test_item_t new_item_data = {.value = 15, .id = 'Z'};
-    void *new_item = &new_item_data;
-    mu_pvec_err_t err = mu_pvec_sorted_insert(&test_vector, new_item, compare_pointers_by_value, MU_STORE_INSERT_DUPLICATE);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NOTFOUND, err); // Policy requires existing duplicate
-    TEST_ASSERT_EQUAL(3, mu_pvec_count(&test_vector)); // Count should not change
-    // Vector state should be unchanged: [10, 20, 30]
-
-    // Insert an existing value (should succeed, adding a duplicate)
-    test_item_t dup_item_data = {.value = 20, .id = 'F'};
-    void *dup_item = &dup_item_data;
-    err = mu_pvec_sorted_insert(&test_vector, dup_item, compare_pointers_by_value, MU_STORE_INSERT_DUPLICATE);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err);
-    TEST_ASSERT_EQUAL(4, mu_pvec_count(&test_vector)); // Count should increase
-    // Expected state (by value): [10, 20 (original), 20 (inserted), 30] - inserted after the existing 20
-    TEST_ASSERT_EQUAL(10, ((test_item_t*)test_vector.item_store[0])->value);
-    TEST_ASSERT_EQUAL(20, ((test_item_t*)test_vector.item_store[1])->value); // Original 20
-    TEST_ASSERT_EQUAL_PTR(dup_item, test_vector.item_store[2]);            // Inserted duplicate
-    TEST_ASSERT_EQUAL(30, ((test_item_t*)test_vector.item_store[3])->value);
-    TEST_ASSERT_TRUE(is_pointers_sorted_by_value(test_vector.item_store, test_vector.count)); // Verify resulting vector is still sorted
-}
-
-/**
- * @brief Test sorted_insert when vector is full.
- */
 void test_mu_pvec_sorted_insert_full(void) {
-    // Fill the vector with sorted data (by value)
-    test_item_t items_data[TEST_PVEC_CAPACITY];
-     void* items_ptrs[TEST_PVEC_CAPACITY];
-    for (size_t i = 0; i < TEST_PVEC_CAPACITY; ++i) {
-        items_data[i].value = i * 10;
-        items_data[i].id = 'A' + i;
-        items_ptrs[i] = &items_data[i];
-    }
-    // The data and pointers are already sorted here
-    mu_store_psort((void**)items_ptrs, TEST_PVEC_CAPACITY, compare_pointers_by_value); // Ensure the pointers are sorted
-    populate_vector_with_pointers(&test_vector, items_ptrs, TEST_PVEC_CAPACITY);
+    void *storage[2];
+    mu_pvec_t v;
+    mu_pvec_init(&v, storage, 2);
 
-    TEST_ASSERT_EQUAL(TEST_PVEC_CAPACITY, mu_pvec_count(&test_vector));
-    TEST_ASSERT_TRUE(mu_pvec_is_full(&test_vector));
+    item_t A = {.value = 1, .id = 11};
+    item_t B = {.value = 2, .id = 22};
+    item_t C = {.value = 3, .id = 33};
 
-    test_item_t new_item_data = {.value = 55, .id = 'Z'};
-    void *new_item = &new_item_data;
-    mu_pvec_err_t err = mu_pvec_sorted_insert(&test_vector, new_item, compare_pointers_by_value, MU_STORE_INSERT_ANY);
+    mu_pvec_sorted_insert(&v, &A, cmp_item, MU_STORE_INSERT_ANY);
+    mu_pvec_sorted_insert(&v, &B, cmp_item, MU_STORE_INSERT_ANY);
+    mu_pvec_err_t err =
+        mu_pvec_sorted_insert(&v, &C, cmp_item, MU_STORE_INSERT_ANY);
+
     TEST_ASSERT_EQUAL(MU_STORE_ERR_FULL, err);
-    TEST_ASSERT_EQUAL(TEST_PVEC_CAPACITY, mu_pvec_count(&test_vector)); // Count should not change
-
-    // Attempt an upsert of a non-existing item when full (should also fail if insert is needed)
-    test_item_t upsert_item_data = {.value = 105, .id = 'Y'};
-    void *upsert_item = &upsert_item_data;
-    err = mu_pvec_sorted_insert(&test_vector, upsert_item, compare_pointers_by_value, MU_STORE_UPSERT_FIRST);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_FULL, err); // Needs insertion, but full
-    TEST_ASSERT_EQUAL(TEST_PVEC_CAPACITY, mu_pvec_count(&test_vector)); // Count should not change
-
-    // Attempt an upsert of an existing item when full (should succeed - update doesn't need space)
-    test_item_t update_item_data = {.value = 50, .id = 'Y'}; // Value 50 exists (item at index 5)
-    void *update_item = &update_item_data;
-    err = mu_pvec_sorted_insert(&test_vector, update_item, compare_pointers_by_value, MU_STORE_UPSERT_FIRST);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, err); // Update succeeds
-    TEST_ASSERT_EQUAL(TEST_PVEC_CAPACITY, mu_pvec_count(&test_vector)); // Count should not change
-    // Find the pointer that points to the item with value 50 in the now sorted vector
-    size_t index_of_50;
-    int search_val_50 = 50;
-    mu_pvec_err_t find_err = mu_pvec_find(&test_vector, find_test_item_by_value_fn, &search_val_50, &index_of_50);
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_NONE, find_err);
-    TEST_ASSERT_EQUAL_PTR(update_item, test_vector.item_store[index_of_50]); // Verify the pointer was updated
-
+    TEST_ASSERT_EQUAL_size_t(2, mu_pvec_count(&v));
 }
 
-/**
- * @brief Test sorted_insert with invalid parameters.
- */
-void test_mu_pvec_sorted_insert_invalid_params(void) {
-    void *items[] = {&item1};
-    populate_vector_with_pointers(&test_vector, items, 1);
-    test_item_t new_item_data = {.value = 55, .id = 'Z'};
-    void *new_item = &new_item_data;
+void test_mu_pvec_sorted_insert_duplicate_full_on_match(void)
+{
+    void  *storage[2];
+    mu_pvec_t v;
+    mu_pvec_init(&v, storage, 2);
 
-    mu_pvec_err_t err = mu_pvec_sorted_insert(NULL, new_item, compare_pointers_by_value, MU_STORE_INSERT_ANY); // NULL vector
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, err);
+    // Fill the vector with two items having the same value==1
+    item_t A = { .value = 1, .id = 10 };
+    item_t B = { .value = 1, .id = 20 };
+    mu_pvec_sorted_insert(&v, &A, cmp_item, MU_STORE_INSERT_ANY);
+    mu_pvec_sorted_insert(&v, &B, cmp_item, MU_STORE_INSERT_ANY);
+    TEST_ASSERT_EQUAL_size_t(2, mu_pvec_count(&v));
 
-    err = mu_pvec_sorted_insert(&test_vector, NULL, compare_pointers_by_value, MU_STORE_INSERT_ANY); // NULL item
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, err);
-
-    err = mu_pvec_sorted_insert(&test_vector, new_item, NULL, MU_STORE_INSERT_ANY); // NULL compare_fn
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, err);
-
-    err = mu_pvec_sorted_insert(&test_vector, new_item, compare_pointers_by_value, 9999); // bad policy
-    TEST_ASSERT_EQUAL(MU_STORE_ERR_PARAM, err);
+    // Now the vector is full and first_match != SIZE_MAX for value==1
+    item_t C = { .value = 1, .id = 30 };
+    mu_pvec_err_t err = mu_pvec_sorted_insert(
+        &v, &C, cmp_item, MU_STORE_INSERT_DUPLICATE);
+    TEST_ASSERT_EQUAL(MU_STORE_ERR_FULL, err);
+    // Vector should remain unchanged
+    item_t *out;
+    mu_pvec_ref(&v, 0, (void**)&out);
+    TEST_ASSERT_EQUAL_INT(10, out->id);
+    mu_pvec_ref(&v, 1, (void**)&out);
+    TEST_ASSERT_EQUAL_INT(20, out->id);
 }
-
 
 // *****************************************************************************
-// Main Test Runner
+// main driver.
 
 int main(void) {
     UNITY_BEGIN();
 
-    // Core operations
-    RUN_TEST(test_mu_pvec_init_success);
-    RUN_TEST(test_mu_pvec_init_invalid_params);
-    RUN_TEST(test_mu_pvec_capacity);
-    RUN_TEST(test_mu_pvec_count);
-    RUN_TEST(test_mu_pvec_is_empty);
-    RUN_TEST(test_mu_pvec_is_full);
-    RUN_TEST(test_mu_pvec_clear);
+    RUN_TEST(test_mu_pvec_init_and_basic_properties);
+    RUN_TEST(test_mu_pvec_push_pop_ref_clear);
+    RUN_TEST(test_mu_pvec_insert_delete);
+    RUN_TEST(test_mu_pvec_replace_swap);
+    RUN_TEST(test_mu_pvec_peek_and_find);
+    RUN_TEST(test_mu_pvec_sort_and_reverse);
 
-    // Element access (Updated ref signature)
-    RUN_TEST(test_mu_pvec_ref_valid);
-    RUN_TEST(test_mu_pvec_ref_invalid);
-    RUN_TEST(test_mu_pvec_replace);
-    RUN_TEST(test_mu_pvec_replace_valid);
-    RUN_TEST(test_mu_pvec_replace_invalid);
+    RUN_TEST(test_mu_pvec_insert_any_keeps_sorted);
+    RUN_TEST(test_mu_pvec_insert_first_and_last_on_duplicate);
+    RUN_TEST(test_mu_pvec_insert_unique_and_duplicate);
+    RUN_TEST(test_mu_pvec_update_first_last_all);
+    RUN_TEST(test_mu_pvec_upsert_first_and_last);
 
-    // Stack operations
-    RUN_TEST(test_mu_pvec_push_success);
+    RUN_TEST(test_mu_pvec_init_null_v);
+    RUN_TEST(test_mu_pvec_init_null_store);
+    RUN_TEST(test_mu_pvec_init_zero_capacity);
+    RUN_TEST(test_mu_pvec_is_empty_null);
+    RUN_TEST(test_mu_pvec_is_full_null);
+    RUN_TEST(test_mu_pvec_clear_null);
+    RUN_TEST(test_mu_pvec_ref_param_errors);
+    RUN_TEST(test_mu_pvec_ref_index_oob);
+    RUN_TEST(test_mu_pvec_insert_null);
+    RUN_TEST(test_mu_pvec_insert_index_too_large);
+    RUN_TEST(test_mu_pvec_delete_null);
+    RUN_TEST(test_mu_pvec_delete_index_too_large);
+    RUN_TEST(test_mu_pvec_delete_with_null_outptr);
+    RUN_TEST(test_mu_pvec_push_null);
     RUN_TEST(test_mu_pvec_push_full);
-    RUN_TEST(test_mu_pvec_push_invalid_param);
-    RUN_TEST(test_mu_pvec_pop_success);
+    RUN_TEST(test_mu_pvec_pop_null_args);
     RUN_TEST(test_mu_pvec_pop_empty);
-    RUN_TEST(test_mu_pvec_pop_invalid_params);
-    RUN_TEST(test_mu_pvec_peek);
+    RUN_TEST(test_mu_pvec_rfind_param_and_notfound);
+    RUN_TEST(test_mu_pvec_sort_param_and_short);
+    RUN_TEST(test_mu_pvec_reverse_param_and_short);
+    RUN_TEST(test_mu_pvec_sorted_insert_param);
 
-    // Insertion/deletion by index
-    RUN_TEST(test_mu_pvec_insert_success);
-    RUN_TEST(test_mu_pvec_insert_full);
-    RUN_TEST(test_mu_pvec_insert_invalid_params_or_index);
-    RUN_TEST(test_mu_pvec_delete_success);
-    RUN_TEST(test_mu_pvec_delete_invalid);
-
-    // Searching (Unsorted - Renamed functions, uses find_fn)
-    RUN_TEST(test_mu_pvec_find_by_value);
-    RUN_TEST(test_mu_pvec_find_by_id);
-    RUN_TEST(test_mu_pvec_find_not_found);
-    RUN_TEST(test_mu_pvec_find_invalid_params);
-    RUN_TEST(test_mu_pvec_rfind_by_value);
-    RUN_TEST(test_mu_pvec_rfind_by_id);
-    RUN_TEST(test_mu_pvec_rfind_not_found);
-    RUN_TEST(test_mu_pvec_rfind_invalid_params);
-
-    // Sorting and Reversing
-    RUN_TEST(test_mu_pvec_sort); // Uses the real mu_store_psort
-    RUN_TEST(test_mu_pvec_sort_invalid_params);
-    RUN_TEST(test_mu_pvec_reverse);
-
-    // Sorted Insertion / Update / Upsert
-    // NOTE: These tests assume the vector is *already* sorted by the comparison function before the call.
-    // They test the logic of finding the correct position and applying the policy.
-    // The test setup uses the real mu_store_psort to sort the initial data for these tests.
-    RUN_TEST(test_mu_pvec_sorted_insert_ANY);
-    RUN_TEST(test_mu_pvec_sorted_insert_FIRST);
-    RUN_TEST(test_mu_pvec_sorted_insert_LAST);
-    RUN_TEST(test_mu_pvec_sorted_insert_UPDATE_FIRST);
-    RUN_TEST(test_mu_pvec_sorted_insert_UPDATE_LAST);
-    RUN_TEST(test_mu_pvec_sorted_insert_UPDATE_ALL);
-    RUN_TEST(test_mu_pvec_sorted_insert_UPSERT_FIRST);
-    RUN_TEST(test_mu_pvec_sorted_insert_UPSERT_LAST);
-    RUN_TEST(test_mu_pvec_sorted_insert_UNIQUE);
-    RUN_TEST(test_mu_pvec_sorted_insert_DUPLICATE);
+    RUN_TEST(test_mu_pvec_sorted_insert_update_first_notfound);
+    RUN_TEST(test_mu_pvec_sorted_insert_update_last_notfound);
+    RUN_TEST(test_mu_pvec_sorted_insert_update_all_notfound);
+    RUN_TEST(test_mu_pvec_sorted_insert_upsert_first_no_match);
+    RUN_TEST(test_mu_pvec_sorted_insert_upsert_last_match);
+    RUN_TEST(test_mu_pvec_sorted_insert_duplicate_notfound);
+    RUN_TEST(test_mu_pvec_sorted_insert_first_no_match);
+    RUN_TEST(test_mu_pvec_sorted_insert_last_no_match);
     RUN_TEST(test_mu_pvec_sorted_insert_full);
-    RUN_TEST(test_mu_pvec_sorted_insert_invalid_params);
+    RUN_TEST(test_mu_pvec_sorted_insert_duplicate_full_on_match);
 
     return UNITY_END();
 }
-
-// *****************************************************************************
-// Private (static) code - Implementations of helper functions defined above
-
-// Implementations for comparison and find functions are defined above
-// Implementations for sorted check helpers are defined above
-// Implementation for populate_vector_with_pointers is defined above
